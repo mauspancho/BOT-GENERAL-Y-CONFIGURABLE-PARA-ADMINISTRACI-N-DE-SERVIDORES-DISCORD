@@ -1,0 +1,11 @@
+services:
+  discord-community-bot:
+    build: .
+    env_file:
+      - .env
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./backups:/app/backups
+    restart: unless-stopped

@@ -1,0 +1,7 @@
+{
+  "setup.title": "Discord Community Bot Setup",
+  "validation.success": "Validation successful",
+  "rules.accepted": "Rules accepted. Your access was updated.",
+  "rules.alreadyAccepted": "You had already accepted this rules version.",
+  "rules.rejected.warn": "You need to accept the rules to get full access."
+}

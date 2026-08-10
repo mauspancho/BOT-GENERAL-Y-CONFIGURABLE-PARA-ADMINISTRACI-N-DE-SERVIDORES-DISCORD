@@ -1,0 +1,17 @@
+[Unit]
+Description=Discord Community Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/discord-community-bot
+EnvironmentFile=/opt/discord-community-bot/.env
+ExecStart=/usr/bin/npm start
+Restart=on-failure
+RestartSec=10
+User=discordbot
+Group=discordbot
+
+[Install]
+WantedBy=multi-user.target

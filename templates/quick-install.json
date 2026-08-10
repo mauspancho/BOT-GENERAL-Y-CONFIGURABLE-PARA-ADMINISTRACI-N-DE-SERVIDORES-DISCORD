@@ -1,0 +1,19 @@
+{
+  "categories": {
+    "information": { "name": "INFORMACION" },
+    "community": { "name": "COMUNIDAD" },
+    "administration": { "name": "ADMINISTRACION" }
+  },
+  "channels": {
+    "welcome": { "name": "bienvenida", "type": "text", "categoryKey": "information", "function": "welcome", "readOnlyForMembers": true },
+    "rules": { "name": "reglas", "type": "text", "categoryKey": "information", "function": "rules", "readOnlyForMembers": true },
+    "announcements": { "name": "anuncios", "type": "announcement", "categoryKey": "information", "function": "announcements", "readOnlyForMembers": true },
+    "roles": { "name": "roles", "type": "text", "categoryKey": "information", "function": "roles", "readOnlyForMembers": true },
+    "general": { "name": "general", "type": "text", "categoryKey": "community", "function": "general", "readOnlyForMembers": false },
+    "logs": { "name": "logs", "type": "text", "categoryKey": "administration", "function": "logs", "readOnlyForMembers": true }
+  },
+  "roles": {
+    "pending": { "name": "Sin verificar", "enabled": true, "protected": true },
+    "member": { "name": "Miembro", "enabled": true, "protected": true }
+  }
+}
