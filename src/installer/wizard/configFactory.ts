@@ -1,7 +1,13 @@
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
 import { ChannelType } from "discord.js";
 import type { Guild } from "discord.js";
-import { CONFIG_VERSION, createDefaultModules, type ServerConfig } from "../../core/config/schema.js";
+import {
+  CONFIG_VERSION,
+  createDefaultModules,
+  type ChannelConfig,
+  type RoleConfig,
+  type ServerConfig,
+} from "../../core/config/schema.js";
 import { listReusableChannels, listReusableRoles, makeRole } from "../discord/setupDiscord.js";
 import { configureRules } from "./rulesWizard.js";
 
@@ -29,6 +35,10 @@ export async function buildInstallationConfig(guild: Guild): Promise<ServerConfi
       { name: "Reglas", value: "rules", checked: modules.rules },
       { name: "Logs", value: "logs", checked: modules.logs },
       { name: "Self-roles (base Fase 2)", value: "selfRoles", checked: false },
+      { name: "Anuncios", value: "announcements", checked: modules.announcements },
+      { name: "Tickets (base Fase 2)", value: "tickets", checked: modules.tickets },
+      { name: "Sugerencias (base Fase 2)", value: "suggestions", checked: modules.suggestions },
+      { name: "Moderacion (base Fase 2)", value: "moderation", checked: modules.moderation },
     ],
   });
 
@@ -38,7 +48,9 @@ export async function buildInstallationConfig(guild: Guild): Promise<ServerConfi
   }
 
   const base =
-    installMode === "quick" ? await quickConfig(guild, communityName, modules) : await customConfig(guild, communityName, modules);
+    installMode === "quick"
+      ? await quickConfig(guild, communityName, modules)
+      : await customConfig(guild, communityName, modules);
 
   const rulesPath = modules.rules ? await configureRules() : "./data/rules.md";
   const welcome = {
@@ -86,73 +98,176 @@ async function quickConfig(
   communityName: string,
   modules: ServerConfig["modules"],
 ): Promise<Omit<ServerConfig, "welcome" | "rules">> {
-  const information = await input({ message: "Categoria informacion:", default: "INFORMACION" });
-  const community = await input({ message: "Categoria comunidad:", default: "COMUNIDAD" });
-  const administration = await input({ message: "Categoria administracion:", default: "ADMINISTRACION" });
-
-  const config: Omit<ServerConfig, "welcome" | "rules"> = {
-    version: CONFIG_VERSION,
-    guildId: guild.id,
-    communityName,
-    locale: "es",
-    categories: {
-      information: { name: information },
-      community: { name: community },
-      administration: { name: administration },
-    },
-    channels: {
-      welcome: {
-        name: await input({ message: "Canal bienvenida:", default: "bienvenida" }),
-        type: "text",
-        categoryKey: "information",
-        function: "welcome",
-        readOnlyForMembers: true,
-      },
-      rules: {
-        name: await input({ message: "Canal reglas:", default: "reglas" }),
-        type: "text",
-        categoryKey: "information",
-        function: "rules",
-        readOnlyForMembers: true,
-      },
-      announcements: {
-        name: await input({ message: "Canal anuncios:", default: "anuncios" }),
-        type: "announcement",
-        categoryKey: "information",
-        function: "announcements",
-        readOnlyForMembers: true,
-      },
-      roles: {
-        name: await input({ message: "Canal roles:", default: "roles" }),
-        type: "text",
-        categoryKey: "information",
-        function: "roles",
-        readOnlyForMembers: true,
-      },
-      general: {
-        name: await input({ message: "Canal general:", default: "general" }),
-        type: "text",
-        categoryKey: "community",
-        function: "general",
-        readOnlyForMembers: false,
-      },
-      logs: {
-        name: await input({ message: "Canal logs:", default: "logs" }),
-        type: "text",
-        categoryKey: "administration",
-        function: "logs",
-        readOnlyForMembers: true,
-      },
-    },
-    roles: {
-      pending: makeRole(await input({ message: "Rol pendiente:", default: "Sin verificar" })),
-      member: makeRole(await input({ message: "Rol miembro:", default: "Miembro" })),
-    },
-    modules,
+  const promptValues: QuickInstallPromptValues = {
+    informationCategory: needsInformationCategory(modules)
+      ? await input({ message: "Categoria informacion:", default: "INFORMACION" })
+      : "INFORMACION",
+    communityCategory: await input({ message: "Categoria comunidad:", default: "COMUNIDAD" }),
+    administrationCategory: modules.logs
+      ? await input({ message: "Categoria administracion:", default: "ADMINISTRACION" })
+      : "ADMINISTRACION",
+    welcomeChannel: modules.welcome
+      ? await input({ message: "Canal bienvenida:", default: "bienvenida" })
+      : "bienvenida",
+    rulesChannel: modules.rules ? await input({ message: "Canal reglas:", default: "reglas" }) : "reglas",
+    announcementsChannel: modules.announcements
+      ? await input({ message: "Canal anuncios:", default: "anuncios" })
+      : "anuncios",
+    selfRolesChannel: modules.selfRoles
+      ? await input({ message: "Canal roles:", default: "roles" })
+      : "roles",
+    generalChannel: await input({ message: "Canal general:", default: "general" }),
+    logsChannel: modules.logs ? await input({ message: "Canal logs:", default: "logs" }) : "logs",
+    pendingRole: modules.rules
+      ? await input({ message: "Rol pendiente:", default: "Sin verificar" })
+      : "Sin verificar",
+    memberRole: modules.rules ? await input({ message: "Rol miembro:", default: "Miembro" }) : "Miembro",
   };
+
+  const config = createQuickInstallConfig(guild.id, communityName, modules, promptValues);
 
   await maybeReuseResources(guild, config);
   return config;
+}
+
+export interface QuickInstallPromptValues {
+  informationCategory: string;
+  communityCategory: string;
+  administrationCategory: string;
+  welcomeChannel: string;
+  rulesChannel: string;
+  announcementsChannel: string;
+  selfRolesChannel: string;
+  generalChannel: string;
+  logsChannel: string;
+  pendingRole: string;
+  memberRole: string;
+}
+
+export function createQuickInstallConfig(
+  guildId: string,
+  communityName: string,
+  modules: ServerConfig["modules"],
+  values: QuickInstallPromptValues,
+): Omit<ServerConfig, "welcome" | "rules"> {
+  const categories: Record<string, { name: string; id?: string }> = {
+    community: { name: values.communityCategory },
+  };
+  const channels: Record<string, ChannelConfig> = {
+    general: {
+      name: values.generalChannel,
+      type: "text",
+      categoryKey: "community",
+      function: "general",
+      readOnlyForMembers: false,
+    },
+  };
+  const roles: Record<string, RoleConfig> = {};
+
+  if (needsInformationCategory(modules)) {
+    categories.information = { name: values.informationCategory };
+  }
+
+  if (modules.logs) {
+    categories.administration = { name: values.administrationCategory };
+  }
+
+  if (modules.welcome) {
+    channels.welcome = {
+      name: values.welcomeChannel,
+      type: "text",
+      categoryKey: "information",
+      function: "welcome",
+      readOnlyForMembers: true,
+    };
+  }
+
+  if (modules.rules) {
+    channels.rules = {
+      name: values.rulesChannel,
+      type: "text",
+      categoryKey: "information",
+      function: "rules",
+      readOnlyForMembers: true,
+    };
+    roles.pending = makeRole(values.pendingRole);
+    roles.member = makeRole(values.memberRole);
+  }
+
+  if (modules.announcements) {
+    channels.announcements = {
+      name: values.announcementsChannel,
+      type: "text",
+      categoryKey: "information",
+      function: "announcements",
+      readOnlyForMembers: true,
+    };
+  }
+
+  if (modules.selfRoles) {
+    channels.roles = {
+      name: values.selfRolesChannel,
+      type: "text",
+      categoryKey: "information",
+      function: "roles",
+      readOnlyForMembers: true,
+    };
+  }
+
+  if (modules.logs) {
+    channels.logs = {
+      name: values.logsChannel,
+      type: "text",
+      categoryKey: "administration",
+      function: "logs",
+      readOnlyForMembers: true,
+    };
+  }
+
+  return {
+    version: CONFIG_VERSION,
+    guildId,
+    communityName,
+    locale: "es",
+    categories,
+    channels,
+    roles,
+    modules,
+  };
+}
+
+function needsInformationCategory(modules: ServerConfig["modules"]): boolean {
+  return modules.welcome || modules.rules || modules.announcements || modules.selfRoles;
+}
+
+function rulesNeedVerificationRoles(modules: ServerConfig["modules"]): boolean {
+  return modules.rules;
+}
+
+function enabledCustomLogicalChannels(modules: ServerConfig["modules"]): Array<ChannelConfig["function"]> {
+  const channels: Array<ChannelConfig["function"]> = ["general"];
+  if (modules.welcome) {
+    channels.push("welcome");
+  }
+  if (modules.rules) {
+    channels.push("rules");
+  }
+  if (modules.announcements) {
+    channels.push("announcements");
+  }
+  if (modules.selfRoles) {
+    channels.push("roles");
+  }
+  if (modules.tickets) {
+    channels.push("tickets");
+  }
+  if (modules.suggestions) {
+    channels.push("suggestions");
+  }
+  if (modules.logs) {
+    channels.push("logs");
+  }
+  return channels;
 }
 
 async function customConfig(
@@ -179,12 +294,7 @@ async function customConfig(
     addCategory = await confirm({ message: "Agregar otra categoria?", default: false });
   }
 
-  for (const logical of ["welcome", "rules", "general", "logs"] as const) {
-    const enabled = logical === "welcome" ? modules.welcome : logical === "rules" ? modules.rules : logical === "logs" ? modules.logs : true;
-    if (!enabled) {
-      continue;
-    }
-
+  for (const logical of enabledCustomLogicalChannels(modules)) {
     const name = await input({ message: `Nombre del canal para ${logical}:`, default: logical });
     const categoryKeys = Object.keys(config.categories);
     const categoryKey =
@@ -203,8 +313,10 @@ async function customConfig(
     };
   }
 
-  config.roles.pending = makeRole(await input({ message: "Rol pendiente:", default: "Sin verificar" }));
-  config.roles.member = makeRole(await input({ message: "Rol miembro:", default: "Miembro" }));
+  if (rulesNeedVerificationRoles(modules)) {
+    config.roles.pending = makeRole(await input({ message: "Rol pendiente:", default: "Sin verificar" }));
+    config.roles.member = makeRole(await input({ message: "Rol miembro:", default: "Miembro" }));
+  }
 
   await maybeReuseResources(guild, config);
   return config;

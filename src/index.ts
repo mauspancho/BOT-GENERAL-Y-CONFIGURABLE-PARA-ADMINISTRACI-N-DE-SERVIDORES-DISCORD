@@ -1,3 +1,4 @@
+import { Events } from "discord.js";
 import { loadEnv } from "./core/config/env.js";
 import { getConfigPath, getDatabasePath } from "./core/config/paths.js";
 import { readServerConfig } from "./core/config/configStore.js";
@@ -15,7 +16,7 @@ const config = readServerConfig(getConfigPath());
 const database = await openDatabase(getDatabasePath());
 const client = createDiscordClient();
 
-client.once("ready", () => {
+client.once(Events.ClientReady, () => {
   void (async () => {
     logger.info({ bot: client.user?.tag, guildId: config.guildId }, "Discord connection ready");
     await registerGuildCommands(env.DISCORD_TOKEN, env.DISCORD_CLIENT_ID, config);
@@ -24,7 +25,7 @@ client.once("ready", () => {
       await module.start({ client, config, database, logger });
     }
   })().catch((error: unknown) => {
-    logger.error({ error }, "ready handler failed");
+    logger.error({ error }, "clientReady handler failed");
   });
 });
 

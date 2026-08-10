@@ -52,7 +52,7 @@ export function getRequiredPermissions(config: Pick<ServerConfig, "modules" | "r
     reason: "crear o reparar categorias y canales desde setup",
   });
 
-  if (config.modules.logs || config.modules.moderation) {
+  if (config.modules.moderation) {
     requirements.push({
       bit: PermissionFlagsBits.ManageMessages,
       name: "Manage Messages",

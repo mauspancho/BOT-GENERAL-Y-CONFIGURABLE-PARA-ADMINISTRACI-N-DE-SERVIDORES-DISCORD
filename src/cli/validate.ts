@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import { pathToFileURL } from "node:url";
+import { Events } from "discord.js";
 import { z } from "zod";
 import { envSchema } from "../core/config/env.js";
 import { getConfigPath, getDatabasePath } from "../core/config/paths.js";
@@ -72,7 +73,7 @@ export async function runValidation(): Promise<Check[]> {
     try {
       await client.login(envParsed.data.DISCORD_TOKEN);
       if (!client.isReady()) {
-        await once(client, "ready");
+        await once(client, Events.ClientReady);
       }
 
       checks.push({ name: "Discord token", ok: true });

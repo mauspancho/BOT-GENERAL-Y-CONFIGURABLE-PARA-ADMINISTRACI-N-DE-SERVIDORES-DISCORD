@@ -1,12 +1,20 @@
 import { once } from "node:events";
 import { confirm, select } from "@inquirer/prompts";
+import { Events } from "discord.js";
+import type { Guild } from "discord.js";
 import { createDiscordClient } from "../core/discord/client.js";
 import { getConfigPath, getDatabasePath } from "../core/config/paths.js";
 import { configExists, readServerConfig, writeServerConfig } from "../core/config/configStore.js";
 import { loadEnv } from "../core/config/env.js";
 import { openDatabase } from "../core/database/sqlite.js";
 import { createBackup, listBackups, restoreBackup } from "../installer/backup/backupService.js";
-import { applyStructurePlan, validateBotPermissions } from "../installer/discord/setupDiscord.js";
+import {
+  applyStructurePlan,
+  preflightStructurePlan,
+  rollbackCreatedResources,
+  StructureApplyError,
+  validateBotPermissions,
+} from "../installer/discord/setupDiscord.js";
 import { buildInstallationConfig } from "../installer/wizard/configFactory.js";
 import { writeEnvFile } from "../installer/wizard/envWriter.js";
 import { formatInstallationTree } from "../utils/formatPlan.js";
@@ -70,7 +78,7 @@ async function runInstall(): Promise<void> {
   const client = createDiscordClient();
   await client.login(token);
   if (!client.isReady()) {
-    await once(client, "ready");
+    await once(client, Events.ClientReady);
   }
 
   console.log("\nConexion Discord correcta.\n");
@@ -88,6 +96,13 @@ async function runInstall(): Promise<void> {
   await guild.roles.fetch();
 
   const config = await buildInstallationConfig(guild);
+  const preflight = preflightStructurePlan(guild, config);
+  printPreflight(preflight);
+  if (!preflight.ok) {
+    await client.destroy();
+    return;
+  }
+
   console.log("\nSe realizaran los siguientes cambios:\n");
   console.log(formatInstallationTree(config));
 
@@ -111,7 +126,11 @@ async function runInstall(): Promise<void> {
     return;
   }
 
-  const changes = await applyStructurePlan(guild, config);
+  const changes = await applyStructurePlanSafely(guild, config);
+  if (!changes) {
+    await client.destroy();
+    return;
+  }
   writeServerConfig(getConfigPath(), config);
   const database = await openDatabase(getDatabasePath());
   await registerGuildCommands(token, clientId, config);
@@ -132,11 +151,18 @@ async function runStructureOnly(): Promise<void> {
   const client = createDiscordClient();
   await client.login(env.DISCORD_TOKEN);
   if (!client.isReady()) {
-    await once(client, "ready");
+    await once(client, Events.ClientReady);
   }
   const guild = await client.guilds.fetch(config.guildId);
   await guild.channels.fetch();
   await guild.roles.fetch();
+
+  const preflight = preflightStructurePlan(guild, config);
+  printPreflight(preflight);
+  if (!preflight.ok) {
+    await client.destroy();
+    return;
+  }
 
   console.log(formatInstallationTree(config));
   const shouldApply = await confirm({ message: "Aplicar/reparar estructura faltante?", default: false });
@@ -146,10 +172,62 @@ async function runStructureOnly(): Promise<void> {
   }
 
   createBackup("pre-structure-change");
-  const changes = await applyStructurePlan(guild, config);
+  const changes = await applyStructurePlanSafely(guild, config);
+  if (!changes) {
+    await client.destroy();
+    return;
+  }
   writeServerConfig(getConfigPath(), config);
   await client.destroy();
   console.log(`Cambios procesados: ${changes.length}`);
+}
+
+function printPreflight(result: Awaited<ReturnType<typeof preflightStructurePlan>>): void {
+  for (const warning of result.warnings) {
+    console.warn(`[WARN] ${warning}`);
+  }
+
+  for (const error of result.errors) {
+    console.error(`[ERROR] ${error}`);
+  }
+
+  if (!result.ok) {
+    console.error("No se aplico ningun cambio.");
+  }
+}
+
+async function applyStructurePlanSafely(
+  guild: Guild,
+  config: Parameters<typeof applyStructurePlan>[1],
+): Promise<Awaited<ReturnType<typeof applyStructurePlan>> | undefined> {
+  try {
+    return await applyStructurePlan(guild, config);
+  } catch (error) {
+    if (!(error instanceof StructureApplyError)) {
+      throw error;
+    }
+
+    console.error("\nLa instalacion no pudo completarse.");
+    if (error.createdResources.length > 0) {
+      console.error("\nRecursos creados durante esta ejecucion:");
+      for (const resource of error.createdResources) {
+        console.error(`- ${resource.resourceType} ${resource.name}${resource.id ? ` (${resource.id})` : ""}`);
+      }
+
+      const shouldRollback = await confirm({
+        message: "Revertir solamente los recursos creados en esta ejecucion?",
+        default: false,
+      });
+      if (shouldRollback) {
+        const reverted = await rollbackCreatedResources(guild, error.createdResources);
+        console.log(`Recursos revertidos: ${reverted.length}`);
+      }
+    } else {
+      console.error("No se crearon recursos antes del fallo.");
+    }
+
+    return undefined;
+  }
 }
 
 async function runRestore(): Promise<void> {

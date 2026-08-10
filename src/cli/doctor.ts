@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { once } from "node:events";
 import { parseArgs } from "node:util";
+import { Events } from "discord.js";
 import { loadEnv } from "../core/config/env.js";
 import { getConfigPath, getDatabasePath } from "../core/config/paths.js";
 import { readServerConfig } from "../core/config/configStore.js";
@@ -38,7 +39,7 @@ try {
   const client = createDiscordClient();
   await client.login(env.DISCORD_TOKEN);
   if (!client.isReady()) {
-    await once(client, "ready");
+    await once(client, Events.ClientReady);
   }
   const guild = await client.guilds.fetch(config.guildId);
   diagnostic.discordConnectivity = "ok";

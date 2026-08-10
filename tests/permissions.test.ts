@@ -23,4 +23,42 @@ describe("permission resolver", () => {
       }).map((permission) => permission.name),
     ).toContain("Kick Members");
   });
+
+  it("does not require Manage Messages for logs alone", () => {
+    const modules = createDefaultModules();
+    modules.logs = true;
+    modules.moderation = false;
+
+    const permissions = getRequiredPermissions({
+      modules,
+      rules: {
+        enabled: true,
+        sourcePath: "./data/rules.md",
+        version: 1,
+        requireReacceptOnRulesChange: false,
+        rejectAction: "warn",
+      },
+    }).map((permission) => permission.name);
+
+    expect(permissions).not.toContain("Manage Messages");
+  });
+
+  it("requires Manage Messages for moderation", () => {
+    const modules = createDefaultModules();
+    modules.logs = true;
+    modules.moderation = true;
+
+    const permissions = getRequiredPermissions({
+      modules,
+      rules: {
+        enabled: true,
+        sourcePath: "./data/rules.md",
+        version: 1,
+        requireReacceptOnRulesChange: false,
+        rejectAction: "warn",
+      },
+    }).map((permission) => permission.name);
+
+    expect(permissions).toContain("Manage Messages");
+  });
 });
