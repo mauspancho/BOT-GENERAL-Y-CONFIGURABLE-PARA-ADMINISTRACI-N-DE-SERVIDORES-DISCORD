@@ -1,5 +1,5 @@
-import { ChannelType, type Guild } from "discord.js";
-import { describe, expect, it, vi } from "vitest";
+import { ChannelType } from "discord.js";
+import { describe, expect, it } from "vitest";
 import { createDefaultModules, type ServerConfig } from "../src/core/config/schema.js";
 import { createQuickInstallConfig } from "../src/installer/wizard/configFactory.js";
 import {
@@ -7,6 +7,7 @@ import {
   preflightStructurePlan,
   toDiscordChannelType,
 } from "../src/installer/discord/setupDiscord.js";
+import { category, makeGuildMock, textChannel } from "./support/discordMocks.js";
 
 const promptValues = {
   informationCategory: "INFORMACION",
@@ -74,33 +75,14 @@ describe("setup planning", () => {
 
   it("reuses partially existing resources and does not duplicate them", async () => {
     const config = makeServerConfig();
-    const existingCategory = {
-      id: "cat-1",
-      name: "INFORMACION",
-      type: ChannelType.GuildCategory,
-      isThread: () => false,
-    };
-    const existingCommunityCategory = {
-      id: "cat-2",
-      name: "COMUNIDAD",
-      type: ChannelType.GuildCategory,
-      isThread: () => false,
-    };
-    const existingRules = {
-      id: "chan-1",
-      name: "reglas",
-      type: ChannelType.GuildText,
-      isThread: () => false,
-    };
-    const existingGeneral = {
-      id: "chan-2",
-      name: "general",
-      type: ChannelType.GuildText,
-      isThread: () => false,
-    };
     const guild = makeGuildMock({
       features: [],
-      channels: [existingCategory, existingCommunityCategory, existingRules, existingGeneral],
+      channels: [
+        category("cat-1", "INFORMACION"),
+        category("cat-2", "COMUNIDAD"),
+        textChannel("chan-1", "reglas"),
+        textChannel("chan-2", "general"),
+      ],
       roles: [
         { id: "role-1", name: "Sin verificar", managed: false },
         { id: "role-2", name: "Miembro", managed: false },
@@ -214,42 +196,4 @@ function makeServerConfig(): ServerConfig {
       message: "Hola {user}",
     },
   };
-}
-
-function makeGuildMock(options: {
-  features: string[];
-  channels?: Array<Record<string, unknown>>;
-  roles?: Array<Record<string, unknown>>;
-}): Guild {
-  const channelList = options.channels ?? [];
-  const roleList = options.roles ?? [];
-  const cache = {
-    values: () => channelList.values(),
-    find: (predicate: (channel: Record<string, unknown>) => boolean) => channelList.find(predicate),
-  };
-  const roleCache = {
-    values: () => roleList.values(),
-    find: (predicate: (role: Record<string, unknown>) => boolean) => roleList.find(predicate),
-  };
-
-  return {
-    features: options.features,
-    channels: {
-      cache,
-      fetch: (id: string) => Promise.resolve(channelList.find((channel) => channel.id === id) ?? null),
-      create: vi.fn(),
-    },
-    roles: {
-      cache: roleCache,
-      fetch: (id: string) => Promise.resolve(roleList.find((role) => role.id === id) ?? null),
-      create: vi.fn(),
-      everyone: { id: "everyone" },
-    },
-    members: {
-      me: { id: "bot" },
-    },
-    client: {
-      user: { id: "bot" },
-    },
-  } as unknown as Guild;
 }

@@ -9,6 +9,7 @@ import {
   type ServerConfig,
 } from "../../core/config/schema.js";
 import { listReusableChannels, listReusableRoles, makeRole } from "../discord/setupDiscord.js";
+import { buildCustomInstallationStructure } from "./categoryWizard.js";
 import { configureRules } from "./rulesWizard.js";
 
 type ResourceMode = "create" | "existing" | "disabled";
@@ -50,7 +51,7 @@ export async function buildInstallationConfig(guild: Guild): Promise<ServerConfi
   const base =
     installMode === "quick"
       ? await quickConfig(guild, communityName, modules)
-      : await customConfig(guild, communityName, modules);
+      : await buildCustomInstallationStructure(guild, communityName, modules);
 
   const rulesPath = modules.rules ? await configureRules() : "./data/rules.md";
   const welcome = {
@@ -150,9 +151,7 @@ export function createQuickInstallConfig(
   modules: ServerConfig["modules"],
   values: QuickInstallPromptValues,
 ): Omit<ServerConfig, "welcome" | "rules"> {
-  const categories: Record<string, { name: string; id?: string }> = {
-    community: { name: values.communityCategory },
-  };
+  const categories: Record<string, { name: string; id?: string }> = {};
   const channels: Record<string, ChannelConfig> = {
     general: {
       name: values.generalChannel,
@@ -167,6 +166,8 @@ export function createQuickInstallConfig(
   if (needsInformationCategory(modules)) {
     categories.information = { name: values.informationCategory };
   }
+
+  categories.community = { name: values.communityCategory };
 
   if (modules.logs) {
     categories.administration = { name: values.administrationCategory };
@@ -240,88 +241,6 @@ function needsInformationCategory(modules: ServerConfig["modules"]): boolean {
   return modules.welcome || modules.rules || modules.announcements || modules.selfRoles;
 }
 
-function rulesNeedVerificationRoles(modules: ServerConfig["modules"]): boolean {
-  return modules.rules;
-}
-
-function enabledCustomLogicalChannels(modules: ServerConfig["modules"]): Array<ChannelConfig["function"]> {
-  const channels: Array<ChannelConfig["function"]> = ["general"];
-  if (modules.welcome) {
-    channels.push("welcome");
-  }
-  if (modules.rules) {
-    channels.push("rules");
-  }
-  if (modules.announcements) {
-    channels.push("announcements");
-  }
-  if (modules.selfRoles) {
-    channels.push("roles");
-  }
-  if (modules.tickets) {
-    channels.push("tickets");
-  }
-  if (modules.suggestions) {
-    channels.push("suggestions");
-  }
-  if (modules.logs) {
-    channels.push("logs");
-  }
-  return channels;
-}
-
-async function customConfig(
-  guild: Guild,
-  communityName: string,
-  modules: ServerConfig["modules"],
-): Promise<Omit<ServerConfig, "welcome" | "rules">> {
-  const config: Omit<ServerConfig, "welcome" | "rules"> = {
-    version: CONFIG_VERSION,
-    guildId: guild.id,
-    communityName,
-    locale: "es",
-    categories: {},
-    channels: {},
-    roles: {},
-    modules,
-  };
-
-  let addCategory = true;
-  while (addCategory) {
-    const key = await input({ message: "Identificador logico de categoria:", default: `category${Object.keys(config.categories).length + 1}` });
-    const name = await input({ message: "Nombre fisico de categoria:" });
-    config.categories[key] = { name };
-    addCategory = await confirm({ message: "Agregar otra categoria?", default: false });
-  }
-
-  for (const logical of enabledCustomLogicalChannels(modules)) {
-    const name = await input({ message: `Nombre del canal para ${logical}:`, default: logical });
-    const categoryKeys = Object.keys(config.categories);
-    const categoryKey =
-      categoryKeys.length > 0
-        ? await select({
-            message: `Categoria para ${name}:`,
-            choices: categoryKeys.map((key) => ({ name: config.categories[key]?.name ?? key, value: key })),
-          })
-        : undefined;
-    config.channels[logical] = {
-      name,
-      type: "text",
-      categoryKey,
-      function: logical,
-      readOnlyForMembers: logical !== "general",
-    };
-  }
-
-  if (rulesNeedVerificationRoles(modules)) {
-    config.roles.pending = makeRole(await input({ message: "Rol pendiente:", default: "Sin verificar" }));
-    config.roles.member = makeRole(await input({ message: "Rol miembro:", default: "Miembro" }));
-  }
-
-  await maybeReuseResources(guild, config);
-  return config;
-}
-
 async function maybeReuseResources(guild: Guild, config: Omit<ServerConfig, "welcome" | "rules">): Promise<void> {
   for (const [key, category] of Object.entries(config.categories)) {
     const mode = await select<ResourceMode>({
@@ -353,7 +272,9 @@ async function maybeReuseResources(guild: Guild, config: Omit<ServerConfig, "wel
       ],
     });
     if (mode === "existing") {
-      const channels = listReusableChannels(guild);
+      const channels = listReusableChannels(guild).filter(
+        (channelOption) => channelOption.type !== ChannelType.GuildCategory,
+      );
       const selected = await select({
         message: "Seleccione canal:",
         choices: channels.map((channelOption) => ({ name: `#${channelOption.name}`, value: channelOption.id })),

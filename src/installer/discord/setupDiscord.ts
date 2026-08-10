@@ -289,6 +289,7 @@ export function guildSupportsAnnouncementChannels(guild: Pick<Guild, "features">
 
 function validateStructureShape(config: ServerConfig, result: StructurePreflightResult): void {
   validateModuleResources(config, result);
+  validateUniqueChannelFunctions(config, result);
 
   for (const [key, category] of Object.entries(config.categories)) {
     if (category.name.trim().length === 0) {
@@ -311,6 +312,36 @@ function validateStructureShape(config: ServerConfig, result: StructurePreflight
     if (role.enabled && role.name.trim().length === 0) {
       result.errors.push(`El rol "${key}" no tiene nombre.`);
     }
+  }
+}
+
+function validateUniqueChannelFunctions(config: ServerConfig, result: StructurePreflightResult): void {
+  const uniqueFunctions = new Set([
+    "welcome",
+    "rules",
+    "announcements",
+    "roles",
+    "general",
+    "logs",
+    "tickets",
+    "suggestions",
+  ]);
+  const seen = new Map<string, string>();
+
+  for (const [key, channel] of Object.entries(config.channels)) {
+    if (!uniqueFunctions.has(channel.function)) {
+      continue;
+    }
+
+    const existing = seen.get(channel.function);
+    if (existing) {
+      result.errors.push(
+        `La funcion unica "${channel.function}" esta asignada a "${existing}" y "${key}".`,
+      );
+      continue;
+    }
+
+    seen.set(channel.function, key);
   }
 }
 

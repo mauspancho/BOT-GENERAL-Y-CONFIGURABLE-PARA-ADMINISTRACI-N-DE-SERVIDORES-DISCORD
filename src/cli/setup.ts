@@ -95,19 +95,8 @@ async function runInstall(): Promise<void> {
   await guild.channels.fetch();
   await guild.roles.fetch();
 
-  const config = await buildInstallationConfig(guild);
-  const preflight = preflightStructurePlan(guild, config);
-  printPreflight(preflight);
-  if (!preflight.ok) {
-    await client.destroy();
-    return;
-  }
-
-  console.log("\nSe realizaran los siguientes cambios:\n");
-  console.log(formatInstallationTree(config));
-
-  const shouldApply = await confirm({ message: "Aplicar estos cambios?", default: false });
-  if (!shouldApply) {
+  const config = await buildConfigUntilApproved(guild);
+  if (!config) {
     await client.destroy();
     return;
   }
@@ -180,6 +169,53 @@ async function runStructureOnly(): Promise<void> {
   writeServerConfig(getConfigPath(), config);
   await client.destroy();
   console.log(`Cambios procesados: ${changes.length}`);
+}
+
+async function buildConfigUntilApproved(guild: Guild): Promise<Awaited<ReturnType<typeof buildInstallationConfig>> | undefined> {
+  let retry = true;
+
+  while (retry) {
+    const config = await buildInstallationConfig(guild);
+    const preflight = preflightStructurePlan(guild, config);
+    printPreflight(preflight);
+    if (!preflight.ok) {
+      const action = await select<"modify" | "cancel">({
+        message: "La configuracion tiene errores. Que desea hacer?",
+        choices: [
+          { name: "Modificar estructura", value: "modify" },
+          { name: "Cancelar instalacion", value: "cancel" },
+        ],
+      });
+      if (action === "cancel") {
+        return undefined;
+      }
+      continue;
+    }
+
+    console.log("\nSe aplicara la siguiente estructura:\n");
+    console.log(formatInstallationTree(config));
+
+    const action = await select<"apply" | "modify" | "cancel">({
+      message: "Aplicar esta configuracion?",
+      choices: [
+        { name: "Aplicar configuracion", value: "apply" },
+        { name: "Modificar estructura", value: "modify" },
+        { name: "Cancelar instalacion", value: "cancel" },
+      ],
+    });
+
+    if (action === "apply") {
+      return config;
+    }
+
+    if (action === "cancel") {
+      return undefined;
+    }
+
+    retry = true;
+  }
+
+  return undefined;
 }
 
 function printPreflight(result: Awaited<ReturnType<typeof preflightStructurePlan>>): void {
