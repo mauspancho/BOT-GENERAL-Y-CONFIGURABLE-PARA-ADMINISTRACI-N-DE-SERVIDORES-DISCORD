@@ -81,7 +81,7 @@ Los IDs de categorias, canales y roles se guardan automaticamente cuando Discord
 - SQLite con migraciones y repositorios.
 - Backups sin secretos.
 - Doctor exportable sin token.
-- Modulo opcional The Isle Evrima guiado por `data/the-isle/dinosaurs.md`.
+- Modulo opcional The Isle Evrima con archivo Markdown externo configurable.
 - Docker, docker-compose y plantilla systemd.
 - CI sin secretos Discord para lint, typecheck, tests y build.
 
@@ -90,8 +90,24 @@ Los IDs de categorias, canales y roles se guardan automaticamente cuando Discord
 - `/bot-status`
 - `/config-status`
 - `/rules`
+- `/guide reload` cuando `theIsleGuide` esta activo.
 
 Los comandos administrativos validan permisos del usuario en el handler, no solo durante el registro.
+
+## The Isle Evrima Guide
+
+El modulo `theIsleGuide` usa una fuente Markdown configurable:
+
+```json
+"theIsleGuide": {
+  "enabled": true,
+  "sourcePath": "/ruta/al/archivo/dinosaurs.md"
+}
+```
+
+La ruta se solicita en `npm run setup` cuando activas `The Isle Evrima Guide`. Puede ser absoluta o relativa; las rutas relativas se resuelven desde el directorio raiz del proyecto. El archivo no tiene que estar dentro del repositorio y no se copia a `data/`.
+
+Puedes modificar ese Markdown externamente y ejecutar `/guide reload` para volver a leerlo sin recompilar el bot. El usuario del sistema operativo que ejecuta el proceso del bot debe tener permiso de lectura sobre `sourcePath`, especialmente si lo corres con systemd.
 
 ## Backups Y Restauracion
 

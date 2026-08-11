@@ -95,7 +95,8 @@ async function runInstall(): Promise<void> {
   await guild.channels.fetch();
   await guild.roles.fetch();
 
-  const config = await buildConfigUntilApproved(guild);
+  const existingConfig = configExists(getConfigPath()) ? readServerConfig(getConfigPath()) : undefined;
+  const config = await buildConfigUntilApproved(guild, existingConfig);
   if (!config) {
     await client.destroy();
     return;
@@ -171,11 +172,14 @@ async function runStructureOnly(): Promise<void> {
   console.log(`Cambios procesados: ${changes.length}`);
 }
 
-async function buildConfigUntilApproved(guild: Guild): Promise<Awaited<ReturnType<typeof buildInstallationConfig>> | undefined> {
+async function buildConfigUntilApproved(
+  guild: Guild,
+  existingConfig?: ReturnType<typeof readServerConfig>,
+): Promise<Awaited<ReturnType<typeof buildInstallationConfig>> | undefined> {
   let retry = true;
 
   while (retry) {
-    const config = await buildInstallationConfig(guild);
+    const config = await buildInstallationConfig(guild, existingConfig);
     const preflight = preflightStructurePlan(guild, config);
     printPreflight(preflight);
     if (!preflight.ok) {

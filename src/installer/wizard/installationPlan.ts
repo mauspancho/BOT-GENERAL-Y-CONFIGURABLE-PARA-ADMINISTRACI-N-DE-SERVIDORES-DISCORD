@@ -61,6 +61,7 @@ export function createEmptyStructureConfig(
     channels: {},
     roles: {},
     modules,
+    theIsleGuide: { enabled: false },
   };
 }
 

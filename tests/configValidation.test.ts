@@ -32,8 +32,41 @@ describe("server config validation", () => {
         dmEnabled: false,
         message: "Hola {user}",
       },
+      theIsleGuide: {
+        enabled: false,
+      },
     });
 
     expect(parsed.guildId).toBe("123");
+  });
+
+  it("migrates old configs without theIsleGuide section", () => {
+    const parsed = serverConfigSchema.parse({
+      version: CONFIG_VERSION,
+      guildId: "123",
+      communityName: "Test",
+      categories: {},
+      channels: {},
+      roles: {},
+      modules: {
+        ...createDefaultModules(),
+        theIsleGuide: true,
+      },
+      rules: {
+        enabled: false,
+        sourcePath: "./data/rules.md",
+        version: 1,
+        requireReacceptOnRulesChange: false,
+        rejectAction: "warn",
+      },
+      welcome: {
+        channelEnabled: false,
+        dmEnabled: false,
+        message: "Hola {user}",
+      },
+    });
+
+    expect(parsed.theIsleGuide).toEqual({ enabled: true });
+    expect(parsed.modules.theIsleGuide).toBe(true);
   });
 });

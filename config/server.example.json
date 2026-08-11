@@ -78,5 +78,9 @@
     "channelEnabled": true,
     "dmEnabled": false,
     "message": "Bienvenido {user} a {server}!"
+  },
+  "theIsleGuide": {
+    "enabled": false,
+    "sourcePath": "./data/the-isle/dinosaurs.md"
   }
 }

@@ -142,5 +142,6 @@ function toServerConfig(config: ReturnType<typeof makeConfig>): ServerConfig {
       dmEnabled: false,
       message: "Hola",
     },
+    theIsleGuide: config.theIsleGuide,
   };
 }

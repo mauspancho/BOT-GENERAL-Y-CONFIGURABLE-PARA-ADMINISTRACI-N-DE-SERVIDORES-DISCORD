@@ -12,6 +12,7 @@ import type { ChannelConfig, RoleConfig, ServerConfig } from "../../core/config/
 import { InstallerError } from "../../core/errors/AppError.js";
 import { getMissingPermissions, getRequiredPermissions } from "../../core/permissions/requiredPermissions.js";
 import { ensureAutomaticInfrastructure } from "../wizard/installationPlan.js";
+import { isTheIsleGuideEnabled } from "../../modules/theIsleGuide/theIsleGuideConfig.js";
 
 export interface StructureChange {
   action: "create" | "reuse" | "skip" | "repair";
@@ -348,7 +349,7 @@ function validateModuleResources(config: ServerConfig, result: StructurePrefligh
     [config.modules.tickets, "tickets", "modulo tickets"],
     [config.modules.suggestions, "suggestions", "modulo suggestions"],
     [config.modules.logs, "logs", "infraestructura logs"],
-    [config.modules.theIsleGuide, "theIsleGuide", "modulo theIsleGuide"],
+    [isTheIsleGuideEnabled(config), "theIsleGuide", "modulo theIsleGuide"],
   ];
 
   for (const [required, key, reason] of requiredChannels) {

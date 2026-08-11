@@ -109,5 +109,6 @@ function toPreviewConfig(config: StructureConfig): ServerConfig {
       dmEnabled: false,
       message: "Bienvenido {user} a {server}!",
     },
+    theIsleGuide: config.theIsleGuide,
   };
 }

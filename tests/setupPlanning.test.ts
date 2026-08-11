@@ -20,6 +20,7 @@ const promptValues = {
   generalChannel: "general",
   logsChannel: "logs",
   theIsleGuideChannel: "mutaciones",
+  theIsleGuideSourcePath: "./data/the-isle/dinosaurs.md",
   pendingRole: "Sin verificar",
   memberRole: "Miembro",
 };
@@ -195,6 +196,9 @@ function makeServerConfig(): ServerConfig {
       channelEnabled: false,
       dmEnabled: false,
       message: "Hola {user}",
+    },
+    theIsleGuide: {
+      enabled: false,
     },
   };
 }

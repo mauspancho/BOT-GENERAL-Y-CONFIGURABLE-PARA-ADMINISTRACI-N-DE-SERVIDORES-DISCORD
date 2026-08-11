@@ -228,6 +228,7 @@ function toServerConfig(config: StructureConfig): ServerConfig {
       dmEnabled: false,
       message: "Hola {user}",
     },
+    theIsleGuide: config.theIsleGuide,
   };
 }
 

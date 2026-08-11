@@ -1,15 +1,14 @@
 import type { BotModule } from "../../types/BotModule.js";
-import { getRulesPath } from "../../core/config/paths.js";
-import { loadTheIsleGuideFile } from "./theIsleParser.js";
+import { isTheIsleGuideEnabled, loadConfiguredTheIsleGuideFile } from "./theIsleGuideConfig.js";
 import { ensureTheIslePanel } from "./theIslePanelService.js";
 import { PersistentMessageRepository } from "../../repositories/persistentMessageRepository.js";
 
 export const theIsleGuideModule: BotModule = {
   name: "theIsleGuide",
-  enabled: (config) => config.modules.theIsleGuide,
-  validate() {
+  enabled: (config) => isTheIsleGuideEnabled(config),
+  validate(context) {
     try {
-      loadTheIsleGuideFile(getRulesPath("./data/the-isle/dinosaurs.md"));
+      loadConfiguredTheIsleGuideFile(context.config);
       return Promise.resolve({ ok: true, messages: ["The Isle guide OK."] });
     } catch (error) {
       return Promise.resolve({

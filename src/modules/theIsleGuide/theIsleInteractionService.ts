@@ -1,7 +1,6 @@
 import type { StringSelectMenuInteraction } from "discord.js";
 import type { ServerConfig } from "../../core/config/schema.js";
-import { getRulesPath } from "../../core/config/paths.js";
-import { loadTheIsleGuideFile } from "./theIsleParser.js";
+import { isTheIsleGuideEnabled, loadConfiguredTheIsleGuideFile } from "./theIsleGuideConfig.js";
 import {
   THE_ISLE_SPECIES_SELECT_PREFIX,
   THE_ISLE_TYPE_SELECT_ID,
@@ -14,7 +13,7 @@ export async function handleTheIsleSelect(
   interaction: StringSelectMenuInteraction,
   config: ServerConfig,
 ): Promise<boolean> {
-  if (!config.modules.theIsleGuide) {
+  if (!isTheIsleGuideEnabled(config)) {
     return false;
   }
 
@@ -25,7 +24,7 @@ export async function handleTheIsleSelect(
       return true;
     }
 
-    const data = loadTheIsleGuideFile(getRulesPath("./data/the-isle/dinosaurs.md"));
+    const data = loadConfiguredTheIsleGuideFile(config);
     const rows = buildSpeciesSelectRows(data, selectedType);
     await interaction.reply({
       content: rows.length > 0 ? "Selecciona una especie:" : "No hay especies activas para esta categoria.",
@@ -37,7 +36,7 @@ export async function handleTheIsleSelect(
 
   if (interaction.customId.startsWith(THE_ISLE_SPECIES_SELECT_PREFIX)) {
     const speciesId = interaction.values[0];
-    const data = loadTheIsleGuideFile(getRulesPath("./data/the-isle/dinosaurs.md"));
+    const data = loadConfiguredTheIsleGuideFile(config);
     const species = data.species.find((entry) => entry.enabled && entry.id === speciesId);
     if (!species) {
       await interaction.reply({ content: "La especie seleccionada ya no esta disponible.", ephemeral: true });

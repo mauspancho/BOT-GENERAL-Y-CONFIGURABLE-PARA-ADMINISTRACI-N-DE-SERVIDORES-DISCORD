@@ -3,12 +3,16 @@ import type { SlashCommand } from "./commandTypes.js";
 import { requireManageGuild } from "../core/permissions/guards.js";
 import { PersistentMessageRepository } from "../repositories/persistentMessageRepository.js";
 import { ensureTheIslePanel } from "../modules/theIsleGuide/theIslePanelService.js";
-import { getRulesPath } from "../core/config/paths.js";
-import { loadTheIsleGuideFile } from "../modules/theIsleGuide/theIsleParser.js";
+import {
+  getTheIsleGuideSourcePath,
+  isTheIsleGuideEnabled,
+  loadConfiguredTheIsleGuideFile,
+  resolveTheIsleGuidePath,
+} from "../modules/theIsleGuide/theIsleGuideConfig.js";
 
 export const guideCommand: SlashCommand = {
   name: "guide",
-  enabled: (config) => config.modules.theIsleGuide,
+  enabled: (config) => isTheIsleGuideEnabled(config),
   data: () =>
     new SlashCommandBuilder()
       .setName("guide")
@@ -23,12 +27,36 @@ export const guideCommand: SlashCommand = {
     }
 
     await interaction.deferReply({ ephemeral: true });
-    loadTheIsleGuideFile(getRulesPath("./data/the-isle/dinosaurs.md"));
-    await ensureTheIslePanel(
-      interaction.client,
-      context.config,
-      new PersistentMessageRepository(context.database),
-    );
-    await interaction.editReply("Guia The Isle recargada desde data/the-isle/dinosaurs.md.");
+    const sourcePath = getTheIsleGuideSourcePath(context.config);
+    const resolvedPath = resolveTheIsleGuidePath(context.config);
+
+    try {
+      const data = loadConfiguredTheIsleGuideFile(context.config);
+      await ensureTheIslePanel(
+        interaction.client,
+        context.config,
+        new PersistentMessageRepository(context.database),
+      );
+      await interaction.editReply(
+        [
+          "Guia The Isle recargada correctamente.",
+          "",
+          `Archivo: ${sourcePath}`,
+          `Ruta resuelta: ${resolvedPath}`,
+          `Version: ${data.gameVersion}`,
+          `Especies activas: ${data.species.filter((species) => species.enabled).length}`,
+        ].join("\n"),
+      );
+    } catch (error) {
+      await interaction.editReply(
+        [
+          "No se pudo recargar la guia.",
+          "",
+          `Archivo: ${sourcePath}`,
+          `Ruta resuelta: ${resolvedPath}`,
+          `Error: ${error instanceof Error ? error.message : "Error desconocido."}`,
+        ].join("\n"),
+      );
+    }
   },
 };

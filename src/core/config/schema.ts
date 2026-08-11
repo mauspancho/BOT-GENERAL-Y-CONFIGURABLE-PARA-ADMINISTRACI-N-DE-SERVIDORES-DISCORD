@@ -70,6 +70,13 @@ export const welcomeConfigSchema = z.object({
   message: z.string().default("Bienvenido {user} a {server}!"),
 });
 
+export const theIsleGuideConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    sourcePath: z.string().trim().min(1).optional(),
+  })
+  .default({ enabled: true });
+
 export const serverConfigSchema = z.object({
   version: z.literal(CONFIG_VERSION),
   guildId: z.string().min(1),
@@ -81,6 +88,7 @@ export const serverConfigSchema = z.object({
   modules: modulesSchema,
   rules: rulesConfigSchema,
   welcome: welcomeConfigSchema,
+  theIsleGuide: theIsleGuideConfigSchema,
 });
 
 export type LogicalChannelFunction = (typeof logicalChannelFunctions)[number];
@@ -88,6 +96,7 @@ export type ModuleName = (typeof moduleNames)[number];
 export type ServerConfig = z.infer<typeof serverConfigSchema>;
 export type ChannelConfig = z.infer<typeof channelSchema>;
 export type RoleConfig = z.infer<typeof roleSchema>;
+export type TheIsleGuideConfig = z.infer<typeof theIsleGuideConfigSchema>;
 
 export function createDefaultModules(): ServerConfig["modules"] {
   return {

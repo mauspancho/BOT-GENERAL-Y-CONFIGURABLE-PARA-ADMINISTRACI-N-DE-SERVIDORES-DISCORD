@@ -8,6 +8,12 @@ export function loadTheIsleGuideFile(path: string): TheIsleGuideData {
     throw new ConfigurationError(`No existe el archivo The Isle: ${path}`);
   }
 
+  const stat = fs.statSync(path);
+  if (!stat.isFile()) {
+    throw new ConfigurationError(`La ruta The Isle no es un archivo: ${path}`);
+  }
+
+  fs.accessSync(path, fs.constants.R_OK);
   return parseTheIsleGuideMarkdown(fs.readFileSync(path, "utf8"));
 }
 

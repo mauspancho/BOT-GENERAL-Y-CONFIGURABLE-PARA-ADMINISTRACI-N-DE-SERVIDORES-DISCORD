@@ -3,13 +3,14 @@ import type { ServerConfig } from "../../core/config/schema.js";
 import type { PersistentMessageRepository } from "../../repositories/persistentMessageRepository.js";
 import { hashRules } from "../../services/rulesContentService.js";
 import { THE_ISLE_PANEL_TYPE, buildTheIslePanelPayload } from "./theIsleUi.js";
+import { isTheIsleGuideEnabled } from "./theIsleGuideConfig.js";
 
 export async function ensureTheIslePanel(
   client: Client,
   config: ServerConfig,
   repository: PersistentMessageRepository,
 ): Promise<void> {
-  if (!config.modules.theIsleGuide) {
+  if (!isTheIsleGuideEnabled(config)) {
     return;
   }
 

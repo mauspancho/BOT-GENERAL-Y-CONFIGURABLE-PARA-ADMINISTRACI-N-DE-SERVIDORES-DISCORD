@@ -12,10 +12,16 @@ import { listReusableChannels, listReusableRoles, makeRole } from "../discord/se
 import { buildCustomInstallationStructure } from "./categoryWizard.js";
 import { configureRules } from "./rulesWizard.js";
 import { ensureAutomaticInfrastructure, type StructureConfig } from "./installationPlan.js";
+import {
+  createTheIsleGuideConfig,
+  LEGACY_THE_ISLE_GUIDE_SOURCE_PATH,
+  validateTheIsleGuideSourcePath,
+  type TheIsleGuideValidationSummary,
+} from "../../modules/theIsleGuide/theIsleGuideConfig.js";
 
 type ResourceMode = "create" | "existing" | "disabled";
 
-export async function buildInstallationConfig(guild: Guild): Promise<ServerConfig> {
+export async function buildInstallationConfig(guild: Guild, existingConfig?: ServerConfig): Promise<ServerConfig> {
   const communityName = await input({
     message: "Nombre de la comunidad:",
     default: guild.name,
@@ -50,9 +56,11 @@ export async function buildInstallationConfig(guild: Guild): Promise<ServerConfi
     modules[key] = selectedModuleSet.has(key);
   }
 
+  const theIsleGuide = await configureTheIsleGuide(modules, existingConfig?.theIsleGuide.sourcePath);
+
   const base =
     installMode === "quick"
-      ? await quickConfig(guild, communityName, modules)
+      ? await quickConfig(guild, communityName, modules, theIsleGuide.sourcePath)
       : await buildCustomInstallationStructure(guild, communityName, modules);
 
   const rulesPath = modules.rules ? await configureRules() : "./data/rules.md";
@@ -93,6 +101,7 @@ export async function buildInstallationConfig(guild: Guild): Promise<ServerConfi
       requireReacceptOnRulesChange: false,
       rejectAction,
     },
+    theIsleGuide,
   };
 }
 
@@ -100,6 +109,7 @@ async function quickConfig(
   guild: Guild,
   communityName: string,
   modules: ServerConfig["modules"],
+  theIsleGuideSourcePath: string | undefined,
 ): Promise<Omit<ServerConfig, "welcome" | "rules">> {
   const promptValues: QuickInstallPromptValues = {
     informationCategory: needsInformationCategory(modules)
@@ -122,6 +132,7 @@ async function quickConfig(
     theIsleGuideChannel: modules.theIsleGuide
       ? await input({ message: "Canal guia The Isle:", default: "mutaciones" })
       : "mutaciones",
+    theIsleGuideSourcePath,
     pendingRole: modules.rules
       ? await input({ message: "Rol pendiente:", default: "Sin verificar" })
       : "Sin verificar",
@@ -146,6 +157,7 @@ export interface QuickInstallPromptValues {
   generalChannel: string;
   logsChannel: string;
   theIsleGuideChannel: string;
+  theIsleGuideSourcePath?: string | undefined;
   pendingRole: string;
   memberRole: string;
 }
@@ -235,9 +247,106 @@ export function createQuickInstallConfig(
     channels,
     roles,
     modules,
+    theIsleGuide: createTheIsleGuideConfig(modules, values.theIsleGuideSourcePath),
   };
   ensureAutomaticInfrastructure(config);
   return config;
+}
+
+export async function configureTheIsleGuide(
+  modules: ServerConfig["modules"],
+  currentSourcePath?: string,
+): Promise<ServerConfig["theIsleGuide"]> {
+  if (!modules.theIsleGuide) {
+    return { enabled: false };
+  }
+
+  if (currentSourcePath) {
+    console.log("\nRuta actual The Isle:");
+    console.log(`  ${currentSourcePath}`);
+    const action = await select<"keep" | "change" | "disable">({
+      message: "Configuracion The Isle Guide:",
+      choices: [
+        { name: "Mantener ruta actual", value: "keep" },
+        { name: "Cambiar ruta", value: "change" },
+        { name: "Desactivar modulo", value: "disable" },
+      ],
+    });
+
+    if (action === "keep") {
+      try {
+        validateTheIsleGuideSourcePath(currentSourcePath);
+        return { enabled: true, sourcePath: currentSourcePath };
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : "Ruta The Isle actual invalida.");
+        console.error("Seleccione una ruta valida para continuar.");
+      }
+    }
+
+    if (action === "disable") {
+      modules.theIsleGuide = false;
+      return { enabled: false };
+    }
+  }
+
+  return askForTheIsleGuideSourcePath(currentSourcePath ?? LEGACY_THE_ISLE_GUIDE_SOURCE_PATH);
+}
+
+async function askForTheIsleGuideSourcePath(defaultPath: string): Promise<ServerConfig["theIsleGuide"]> {
+  while (true) {
+    const sourcePath = await input({
+      message: "Ruta del archivo de dinosaurios:",
+      default: defaultPath,
+      validate(value) {
+        try {
+          validateTheIsleGuideSourcePath(value);
+          return true;
+        } catch (error) {
+          return error instanceof Error ? error.message : "Archivo The Isle invalido.";
+        }
+      },
+    });
+
+    const summary = validateTheIsleGuideSourcePath(sourcePath);
+    printTheIsleGuideValidationSummary(summary);
+
+    const action = await select<"use" | "change" | "cancel">({
+      message: "Usar este archivo?",
+      choices: [
+        { name: "Si", value: "use" },
+        { name: "Cambiar ruta", value: "change" },
+        { name: "Cancelar", value: "cancel" },
+      ],
+    });
+
+    if (action === "use") {
+      return { enabled: true, sourcePath: summary.sourcePath };
+    }
+
+    if (action === "cancel") {
+      throw new Error("Configuracion The Isle cancelada.");
+    }
+  }
+}
+
+function printTheIsleGuideValidationSummary(summary: TheIsleGuideValidationSummary): void {
+  console.log("\nArchivo valido.");
+  console.log("\nRuta:");
+  console.log(`  ${summary.sourcePath}`);
+  console.log("\nRuta resuelta:");
+  console.log(`  ${summary.resolvedPath}`);
+  console.log("\nVersion Evrima:");
+  console.log(`  ${summary.data.gameVersion}`);
+  console.log("\nEspecies encontradas:");
+  console.log(`  ${summary.totalSpecies}`);
+  console.log("\nEspecies activas:");
+  console.log(`  ${summary.activeSpecies}`);
+  console.log("\nCarnivoros:");
+  console.log(`  ${summary.countsByType.carnivore}`);
+  console.log("\nHerbivoros:");
+  console.log(`  ${summary.countsByType.herbivore}`);
+  console.log("\nOmnivoros:");
+  console.log(`  ${summary.countsByType.omnivore}\n`);
 }
 
 function needsInformationCategory(modules: ServerConfig["modules"]): boolean {

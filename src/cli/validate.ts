@@ -9,6 +9,11 @@ import { openDatabase } from "../core/database/sqlite.js";
 import { createDiscordClient } from "../core/discord/client.js";
 import { validateBotPermissions } from "../installer/discord/setupDiscord.js";
 import { loadRulesFile } from "../services/rulesContentService.js";
+import {
+  isTheIsleGuideEnabled,
+  loadConfiguredTheIsleGuideFile,
+  resolveTheIsleGuidePath,
+} from "../modules/theIsleGuide/theIsleGuideConfig.js";
 
 interface Check {
   name: string;
@@ -63,6 +68,20 @@ export async function runValidation(): Promise<Check[]> {
         name: "Rules file",
         ok: false,
         message: error instanceof Error ? error.message : "Archivo de reglas invalido.",
+        action: "Run: npm run setup",
+      });
+    }
+  }
+
+  if (config && isTheIsleGuideEnabled(config)) {
+    try {
+      loadConfiguredTheIsleGuideFile(config);
+      checks.push({ name: "The Isle guide file", ok: true, message: resolveTheIsleGuidePath(config) });
+    } catch (error) {
+      checks.push({
+        name: "The Isle guide file",
+        ok: false,
+        message: error instanceof Error ? error.message : "Archivo The Isle invalido.",
         action: "Run: npm run setup",
       });
     }
