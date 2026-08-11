@@ -81,6 +81,7 @@ Los IDs de categorias, canales y roles se guardan automaticamente cuando Discord
 - SQLite con migraciones y repositorios.
 - Backups sin secretos.
 - Doctor exportable sin token.
+- Modulo opcional The Isle Evrima guiado por `data/the-isle/dinosaurs.md`.
 - Docker, docker-compose y plantilla systemd.
 - CI sin secretos Discord para lint, typecheck, tests y build.
 

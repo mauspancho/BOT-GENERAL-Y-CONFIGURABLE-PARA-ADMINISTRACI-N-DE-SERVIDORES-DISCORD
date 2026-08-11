@@ -64,7 +64,8 @@
     "tickets": false,
     "suggestions": false,
     "moderation": false,
-    "logs": true
+    "logs": true,
+    "theIsleGuide": false
   },
   "rules": {
     "enabled": true,

@@ -23,6 +23,7 @@ export function createBackup(reason = "manual"): BackupResult {
   const included: string[] = [];
   copyIfExists(path.join(projectRoot, "config"), path.join(targetDir, "config"), included, "config/");
   copyIfExists(path.join(projectRoot, "data", "rules.md"), path.join(targetDir, "data", "rules.md"), included, "data/rules.md");
+  copyIfExists(path.join(projectRoot, "data", "the-isle"), path.join(targetDir, "data", "the-isle"), included, "data/the-isle/");
   copyIfExists(getDatabasePath(), path.join(targetDir, "data", "bot.sqlite"), included, "data/bot.sqlite");
 
   fs.writeFileSync(
@@ -68,6 +69,7 @@ export function restoreBackup(name: string): BackupResult {
   const restored: string[] = [];
   copyIfExists(path.join(sourceDir, "config"), path.dirname(getConfigPath()), restored, "config/");
   copyIfExists(path.join(sourceDir, "data", "rules.md"), path.join(projectRoot, "data", "rules.md"), restored, "data/rules.md");
+  copyIfExists(path.join(sourceDir, "data", "the-isle"), path.join(projectRoot, "data", "the-isle"), restored, "data/the-isle/");
   copyIfExists(path.join(sourceDir, "data", "bot.sqlite"), getDatabasePath(), restored, "data/bot.sqlite");
 
   return { name, path: sourceDir, included: restored };

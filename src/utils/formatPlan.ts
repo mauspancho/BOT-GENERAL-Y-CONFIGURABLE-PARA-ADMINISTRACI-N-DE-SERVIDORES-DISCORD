@@ -12,7 +12,10 @@ export function formatInstallationTree(config: ServerConfig): string {
       lines.push(`  - #${channel.name}${channel.id ? ` (${channel.id})` : ""}`);
       lines.push(`      tipo: ${formatChannelType(channel.type)}`);
       lines.push(`      funcion: ${channel.function}`);
-      lines.push(`      permisos: ${channel.readOnlyForMembers ? "solo administradores/bot" : "miembros pueden escribir"}`);
+      lines.push(`      permisos: ${formatChannelVisibility(channel.function, channel.readOnlyForMembers)}`);
+      if (channel.function === "logs") {
+        lines.push("      creacion: automatica");
+      }
     }
     lines.push("");
   }
@@ -37,6 +40,14 @@ export function formatInstallationTree(config: ServerConfig): string {
   }
 
   return lines.join("\n");
+}
+
+function formatChannelVisibility(channelFunction: string, readOnlyForMembers: boolean): string {
+  if (channelFunction === "logs") {
+    return "solo administradores";
+  }
+
+  return readOnlyForMembers ? "solo administradores/bot" : "miembros pueden escribir";
 }
 
 function formatChannelType(type: string): string {

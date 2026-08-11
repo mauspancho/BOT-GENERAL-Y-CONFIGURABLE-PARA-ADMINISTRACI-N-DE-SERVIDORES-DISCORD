@@ -21,6 +21,7 @@ const functionLabels: Record<LogicalChannelFunction, string> = {
   logs: "Logs",
   tickets: "Tickets",
   suggestions: "Sugerencias",
+  theIsleGuide: "The Isle Guide",
   custom: "Personalizado",
 };
 
@@ -77,8 +78,8 @@ export function getAvailableChannelFunctions(
   if (modules.suggestions) {
     functions.push("suggestions");
   }
-  if (modules.logs) {
-    functions.push("logs");
+  if (modules.theIsleGuide) {
+    functions.push("theIsleGuide");
   }
 
   functions.push("custom");
@@ -104,7 +105,7 @@ export function inferChannelType(channel: GuildBasedChannel): ChannelConfig["typ
 }
 
 export function defaultReadOnlyForFunction(channelFunction: LogicalChannelFunction): boolean {
-  return ["welcome", "rules", "announcements", "roles", "logs"].includes(channelFunction);
+  return ["welcome", "rules", "announcements", "roles", "logs", "theIsleGuide"].includes(channelFunction);
 }
 
 async function askNewChannel(guild: Guild, config: StructureConfig): Promise<ChannelDraft> {

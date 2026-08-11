@@ -11,6 +11,7 @@ export const logicalChannelFunctions = [
   "logs",
   "tickets",
   "suggestions",
+  "theIsleGuide",
   "custom",
 ] as const;
 
@@ -23,6 +24,7 @@ export const moduleNames = [
   "suggestions",
   "moderation",
   "logs",
+  "theIsleGuide",
 ] as const;
 
 const resourceSchema = z.object({
@@ -51,6 +53,7 @@ export const modulesSchema = z.object({
   suggestions: z.boolean(),
   moderation: z.boolean(),
   logs: z.boolean(),
+  theIsleGuide: z.boolean().default(false),
 });
 
 export const rulesConfigSchema = z.object({
@@ -96,5 +99,6 @@ export function createDefaultModules(): ServerConfig["modules"] {
     suggestions: false,
     moderation: false,
     logs: true,
+    theIsleGuide: false,
   };
 }

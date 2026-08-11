@@ -19,6 +19,7 @@ const promptValues = {
   selfRolesChannel: "roles",
   generalChannel: "general",
   logsChannel: "logs",
+  theIsleGuideChannel: "mutaciones",
   pendingRole: "Sin verificar",
   memberRole: "Miembro",
 };

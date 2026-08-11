@@ -11,6 +11,7 @@ import {
 import type { ChannelConfig, RoleConfig, ServerConfig } from "../../core/config/schema.js";
 import { InstallerError } from "../../core/errors/AppError.js";
 import { getMissingPermissions, getRequiredPermissions } from "../../core/permissions/requiredPermissions.js";
+import { ensureAutomaticInfrastructure } from "../wizard/installationPlan.js";
 
 export interface StructureChange {
   action: "create" | "reuse" | "skip" | "repair";
@@ -51,6 +52,7 @@ export function preflightStructurePlan(
     warnings: [],
   };
 
+  ensureAutomaticInfrastructure(config);
   validateStructureShape(config, result);
   normalizeUnsupportedChannelTypes(guild, config, result);
 
@@ -117,18 +119,9 @@ export async function applyStructurePlan(guild: Guild, config: ServerConfig): Pr
         type: toDiscordChannelType(channel.type, guildSupportsAnnouncementChannels(guild)),
       };
 
-      if (channel.readOnlyForMembers) {
-        channelOptions.permissionOverwrites = [
-          {
-            id: guild.roles.everyone.id,
-            allow: [PermissionFlagsBits.ViewChannel],
-            deny: [PermissionFlagsBits.SendMessages],
-          },
-          {
-            id: guild.members.me?.id ?? guild.client.user.id,
-            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages],
-          },
-        ];
+      const permissionOverwrites = getChannelPermissionOverwrites(guild, channel);
+      if (permissionOverwrites) {
+        channelOptions.permissionOverwrites = permissionOverwrites;
       }
       const created = await guild.channels.create(parent ? { ...channelOptions, parent } : channelOptions);
       channel.id = created.id;
@@ -322,9 +315,9 @@ function validateUniqueChannelFunctions(config: ServerConfig, result: StructureP
     "announcements",
     "roles",
     "general",
-    "logs",
     "tickets",
     "suggestions",
+    "theIsleGuide",
   ]);
   const seen = new Map<string, string>();
 
@@ -354,7 +347,8 @@ function validateModuleResources(config: ServerConfig, result: StructurePrefligh
     [config.modules.selfRoles, "roles", "modulo selfRoles"],
     [config.modules.tickets, "tickets", "modulo tickets"],
     [config.modules.suggestions, "suggestions", "modulo suggestions"],
-    [config.modules.logs, "logs", "modulo logs"],
+    [config.modules.logs, "logs", "infraestructura logs"],
+    [config.modules.theIsleGuide, "theIsleGuide", "modulo theIsleGuide"],
   ];
 
   for (const [required, key, reason] of requiredChannels) {
@@ -370,6 +364,46 @@ function validateModuleResources(config: ServerConfig, result: StructurePrefligh
       }
     }
   }
+}
+
+export function getChannelPermissionOverwrites(
+  guild: Guild,
+  channel: ChannelConfig,
+): GuildChannelCreateOptions["permissionOverwrites"] {
+  const botId = guild.members.me?.id ?? guild.client.user.id;
+
+  if (channel.function === "logs") {
+    return [
+      {
+        id: guild.roles.everyone.id,
+        deny: [PermissionFlagsBits.ViewChannel],
+      },
+      {
+        id: botId,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory,
+        ],
+      },
+    ];
+  }
+
+  if (!channel.readOnlyForMembers) {
+    return undefined;
+  }
+
+  return [
+    {
+      id: guild.roles.everyone.id,
+      allow: [PermissionFlagsBits.ViewChannel],
+      deny: [PermissionFlagsBits.SendMessages],
+    },
+    {
+      id: botId,
+      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages],
+    },
+  ];
 }
 
 function normalizeUnsupportedChannelTypes(

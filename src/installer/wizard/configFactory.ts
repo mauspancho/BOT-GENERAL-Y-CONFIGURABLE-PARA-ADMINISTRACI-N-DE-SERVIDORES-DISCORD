@@ -11,6 +11,7 @@ import {
 import { listReusableChannels, listReusableRoles, makeRole } from "../discord/setupDiscord.js";
 import { buildCustomInstallationStructure } from "./categoryWizard.js";
 import { configureRules } from "./rulesWizard.js";
+import { ensureAutomaticInfrastructure, type StructureConfig } from "./installationPlan.js";
 
 type ResourceMode = "create" | "existing" | "disabled";
 
@@ -40,6 +41,7 @@ export async function buildInstallationConfig(guild: Guild): Promise<ServerConfi
       { name: "Tickets (base Fase 2)", value: "tickets", checked: modules.tickets },
       { name: "Sugerencias (base Fase 2)", value: "suggestions", checked: modules.suggestions },
       { name: "Moderacion (base Fase 2)", value: "moderation", checked: modules.moderation },
+      { name: "The Isle Evrima Guide", value: "theIsleGuide", checked: modules.theIsleGuide },
     ],
   });
 
@@ -104,9 +106,7 @@ async function quickConfig(
       ? await input({ message: "Categoria informacion:", default: "INFORMACION" })
       : "INFORMACION",
     communityCategory: await input({ message: "Categoria comunidad:", default: "COMUNIDAD" }),
-    administrationCategory: modules.logs
-      ? await input({ message: "Categoria administracion:", default: "ADMINISTRACION" })
-      : "ADMINISTRACION",
+    administrationCategory: "ADMINISTRACION",
     welcomeChannel: modules.welcome
       ? await input({ message: "Canal bienvenida:", default: "bienvenida" })
       : "bienvenida",
@@ -118,7 +118,10 @@ async function quickConfig(
       ? await input({ message: "Canal roles:", default: "roles" })
       : "roles",
     generalChannel: await input({ message: "Canal general:", default: "general" }),
-    logsChannel: modules.logs ? await input({ message: "Canal logs:", default: "logs" }) : "logs",
+    logsChannel: "logs",
+    theIsleGuideChannel: modules.theIsleGuide
+      ? await input({ message: "Canal guia The Isle:", default: "mutaciones" })
+      : "mutaciones",
     pendingRole: modules.rules
       ? await input({ message: "Rol pendiente:", default: "Sin verificar" })
       : "Sin verificar",
@@ -126,6 +129,7 @@ async function quickConfig(
   };
 
   const config = createQuickInstallConfig(guild.id, communityName, modules, promptValues);
+  ensureAutomaticInfrastructure(config);
 
   await maybeReuseResources(guild, config);
   return config;
@@ -141,6 +145,7 @@ export interface QuickInstallPromptValues {
   selfRolesChannel: string;
   generalChannel: string;
   logsChannel: string;
+  theIsleGuideChannel: string;
   pendingRole: string;
   memberRole: string;
 }
@@ -168,10 +173,6 @@ export function createQuickInstallConfig(
   }
 
   categories.community = { name: values.communityCategory };
-
-  if (modules.logs) {
-    categories.administration = { name: values.administrationCategory };
-  }
 
   if (modules.welcome) {
     channels.welcome = {
@@ -215,17 +216,17 @@ export function createQuickInstallConfig(
     };
   }
 
-  if (modules.logs) {
-    channels.logs = {
-      name: values.logsChannel,
+  if (modules.theIsleGuide) {
+    channels.theIsleGuide = {
+      name: values.theIsleGuideChannel,
       type: "text",
-      categoryKey: "administration",
-      function: "logs",
+      categoryKey: "information",
+      function: "theIsleGuide",
       readOnlyForMembers: true,
     };
   }
 
-  return {
+  const config: StructureConfig = {
     version: CONFIG_VERSION,
     guildId,
     communityName,
@@ -235,14 +236,19 @@ export function createQuickInstallConfig(
     roles,
     modules,
   };
+  ensureAutomaticInfrastructure(config);
+  return config;
 }
 
 function needsInformationCategory(modules: ServerConfig["modules"]): boolean {
-  return modules.welcome || modules.rules || modules.announcements || modules.selfRoles;
+  return modules.welcome || modules.rules || modules.announcements || modules.selfRoles || modules.theIsleGuide;
 }
 
 async function maybeReuseResources(guild: Guild, config: Omit<ServerConfig, "welcome" | "rules">): Promise<void> {
   for (const [key, category] of Object.entries(config.categories)) {
+    if (key === "administration" && config.modules.logs) {
+      continue;
+    }
     const mode = await select<ResourceMode>({
       message: `Categoria "${category.name}"`,
       choices: [
@@ -264,6 +270,9 @@ async function maybeReuseResources(guild: Guild, config: Omit<ServerConfig, "wel
   }
 
   for (const [key, channel] of Object.entries(config.channels)) {
+    if (channel.function === "logs") {
+      continue;
+    }
     const mode = await select<ResourceMode>({
       message: `Canal "${channel.name}" (${channel.function})`,
       choices: [

@@ -1,6 +1,5 @@
 import type { ChannelConfig, LogicalChannelFunction, ServerConfig } from "../../core/config/schema.js";
 import { CONFIG_VERSION } from "../../core/config/schema.js";
-import { makeRole } from "../discord/setupDiscord.js";
 
 export type StructureConfig = Omit<ServerConfig, "welcome" | "rules">;
 export type DuplicateFunctionResolution = "replace" | "custom" | "cancel";
@@ -34,6 +33,7 @@ export const uniqueChannelFunctions = new Set<LogicalChannelFunction>([
   "logs",
   "tickets",
   "suggestions",
+  "theIsleGuide",
 ]);
 
 const knownCategoryKeys = new Map<string, string>([
@@ -124,6 +124,39 @@ export function ensureVerificationRoles(
 
   config.roles.pending = makeRole(values.pendingRole);
   config.roles.member = makeRole(values.memberRole);
+}
+
+function makeRole(name: string) {
+  return { name, enabled: true, protected: true };
+}
+
+export function ensureAutomaticInfrastructure(config: StructureConfig): void {
+  if (config.modules.logs) {
+    const administrationKey = ensureAdministrationCategory(config);
+    if (!config.channels.logs) {
+      config.channels.logs = {
+        name: "logs",
+        type: "text",
+        categoryKey: administrationKey,
+        function: "logs",
+        readOnlyForMembers: true,
+      };
+    }
+  }
+}
+
+export function ensureAdministrationCategory(config: StructureConfig): string {
+  const existing = Object.entries(config.categories).find(([key, category]) => {
+    const slug = slugifyName(category.name);
+    return key === "administration" || slug === "administracion" || slug === "administration";
+  });
+
+  if (existing) {
+    return existing[0];
+  }
+
+  config.categories.administration = { name: "ADMINISTRACION" };
+  return "administration";
 }
 
 export function slugifyName(name: string): string {

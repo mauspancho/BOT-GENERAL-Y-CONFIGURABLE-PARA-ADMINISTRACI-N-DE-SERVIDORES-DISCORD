@@ -112,6 +112,7 @@ describe("installation plan helpers", () => {
     addPlannedChannel(config, information, channel("bienvenida", "welcome", true));
     addPlannedChannel(config, information, channel("reglas", "rules", true));
     addPlannedChannel(config, information, channel("avisos", "announcements", true));
+    addPlannedChannel(config, information, channel("mutaciones", "theIsleGuide", true));
     addPlannedChannel(config, information, channel("guia", "custom", true));
     addPlannedChannel(config, community, channel("general", "general", false));
     addPlannedChannel(config, community, channel("streams", "custom", false));
@@ -126,6 +127,7 @@ describe("installation plan helpers", () => {
       "multimedia",
       "rules",
       "streams",
+      "theIsleGuide",
       "welcome",
     ]);
     expect(config.channels.guia?.readOnlyForMembers).toBe(true);

@@ -3,7 +3,7 @@ import { ChannelType, type Guild } from "discord.js";
 import { addPlannedCategory, createEmptyStructureConfig, type StructureConfig } from "./installationPlan.js";
 import { askChannelForCategory } from "./channelWizard.js";
 import { formatInstallationTree } from "../../utils/formatPlan.js";
-import { ensureVerificationRoles } from "./installationPlan.js";
+import { ensureAutomaticInfrastructure, ensureVerificationRoles } from "./installationPlan.js";
 import type { ServerConfig } from "../../core/config/schema.js";
 
 type CategoryAction = "create" | "existing" | "finish";
@@ -54,6 +54,7 @@ export async function buildCustomInstallationStructure(
     pendingRole: await maybeAskRoleName(modules.rules, "Rol pendiente:", "Sin verificar"),
     memberRole: await maybeAskRoleName(modules.rules, "Rol miembro:", "Miembro"),
   });
+  ensureAutomaticInfrastructure(config);
 
   return config;
 }

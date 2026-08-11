@@ -8,6 +8,7 @@ import {
 } from "../services/rulesPanelService.js";
 import { RulesInteractionService } from "../services/rulesInteractionService.js";
 import { handleSlashCommand } from "../commands/index.js";
+import { handleTheIsleSelect } from "../modules/theIsleGuide/theIsleInteractionService.js";
 
 export async function handleInteractionCreate(
   interaction: Interaction,
@@ -17,6 +18,12 @@ export async function handleInteractionCreate(
   if (interaction.isChatInputCommand()) {
     await handleSlashCommand(interaction, config, database);
     return;
+  }
+
+  if (interaction.isStringSelectMenu()) {
+    if (await handleTheIsleSelect(interaction, config)) {
+      return;
+    }
   }
 
   if (!interaction.isButton()) {
