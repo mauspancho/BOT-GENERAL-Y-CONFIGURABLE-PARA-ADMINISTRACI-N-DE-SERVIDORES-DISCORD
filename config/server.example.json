@@ -65,6 +65,7 @@
     "suggestions": false,
     "moderation": false,
     "logs": true,
+    "generalAlerts": true,
     "theIsleGuide": false
   },
   "rules": {

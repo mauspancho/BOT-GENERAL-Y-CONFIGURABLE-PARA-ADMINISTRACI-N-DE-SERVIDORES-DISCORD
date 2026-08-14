@@ -35,14 +35,15 @@ export async function buildInstallationConfig(guild: Guild, existingConfig?: Ser
     ],
   });
 
-  const modules = createDefaultModules();
+  const modules = { ...createDefaultModules(), ...existingConfig?.modules };
   const selectedModules = await checkbox({
     message: "Modulos activos:",
     choices: [
       { name: "Bienvenida", value: "welcome", checked: modules.welcome },
       { name: "Reglas", value: "rules", checked: modules.rules },
       { name: "Logs", value: "logs", checked: modules.logs },
-      { name: "Self-roles (base Fase 2)", value: "selfRoles", checked: false },
+      { name: "Alertas al canal general", value: "generalAlerts", checked: modules.generalAlerts },
+      { name: "Self-roles (base Fase 2)", value: "selfRoles", checked: modules.selfRoles },
       { name: "Anuncios", value: "announcements", checked: modules.announcements },
       { name: "Tickets (base Fase 2)", value: "tickets", checked: modules.tickets },
       { name: "Sugerencias (base Fase 2)", value: "suggestions", checked: modules.suggestions },

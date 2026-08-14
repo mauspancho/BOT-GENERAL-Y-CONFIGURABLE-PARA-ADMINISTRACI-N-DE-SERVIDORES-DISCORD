@@ -1,4 +1,5 @@
 import type { BotModule } from "../types/BotModule.js";
+import { generalAlertsModule } from "./generalAlerts/generalAlertsModule.js";
 import { logsModule } from "./logs/logsModule.js";
 import { rulesModule } from "./rules/rulesModule.js";
 import { selfRolesModule } from "./selfRoles/selfRolesModule.js";
@@ -9,6 +10,7 @@ export const modules: BotModule[] = [
   welcomeModule,
   rulesModule,
   logsModule,
+  generalAlertsModule,
   selfRolesModule,
   theIsleGuideModule,
 ];

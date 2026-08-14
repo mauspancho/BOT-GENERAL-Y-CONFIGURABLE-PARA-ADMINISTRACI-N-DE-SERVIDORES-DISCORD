@@ -24,6 +24,7 @@ export const moduleNames = [
   "suggestions",
   "moderation",
   "logs",
+  "generalAlerts",
   "theIsleGuide",
 ] as const;
 
@@ -53,6 +54,7 @@ export const modulesSchema = z.object({
   suggestions: z.boolean(),
   moderation: z.boolean(),
   logs: z.boolean(),
+  generalAlerts: z.boolean().default(true),
   theIsleGuide: z.boolean().default(false),
 });
 
@@ -108,6 +110,7 @@ export function createDefaultModules(): ServerConfig["modules"] {
     suggestions: false,
     moderation: false,
     logs: true,
+    generalAlerts: true,
     theIsleGuide: false,
   };
 }

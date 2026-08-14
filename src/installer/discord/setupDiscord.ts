@@ -340,8 +340,9 @@ function validateUniqueChannelFunctions(config: ServerConfig, result: StructureP
 }
 
 function validateModuleResources(config: ServerConfig, result: StructurePreflightResult): void {
+  const generalReason = config.modules.generalAlerts ? "modulo generalAlerts" : "core del servidor";
   const requiredChannels: Array<[boolean, string, string]> = [
-    [true, "general", "core del servidor"],
+    [true, "general", generalReason],
     [config.modules.welcome && config.welcome.channelEnabled, "welcome", "modulo welcome"],
     [config.modules.rules, "rules", "modulo rules"],
     [config.modules.announcements, "announcements", "modulo announcements"],

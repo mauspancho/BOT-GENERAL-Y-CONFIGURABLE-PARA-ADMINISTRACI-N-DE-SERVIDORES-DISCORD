@@ -1,6 +1,7 @@
 import type { ChatInputCommandInteraction } from "discord.js";
 import type { ServerConfig } from "../core/config/schema.js";
 import type { Database } from "../core/database/sqlite.js";
+import { alertCommand } from "./alert.js";
 import { botStatusCommand } from "./botStatus.js";
 import { configStatusCommand } from "./configStatus.js";
 import { guideCommand } from "./guide.js";
@@ -8,6 +9,7 @@ import { rulesCommand } from "./rules.js";
 import type { SlashCommand } from "./commandTypes.js";
 
 export const allCommands: SlashCommand[] = [
+  alertCommand,
   botStatusCommand,
   configStatusCommand,
   rulesCommand,

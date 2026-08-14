@@ -91,8 +91,15 @@ Los IDs de categorias, canales y roles se guardan automaticamente cuando Discord
 - `/config-status`
 - `/rules`
 - `/guide reload` cuando `theIsleGuide` esta activo.
+- `/alerta enviar` cuando `generalAlerts` esta activo.
 
 Los comandos administrativos validan permisos del usuario en el handler, no solo durante el registro.
+
+## Alertas Al Canal General
+
+El modulo `generalAlerts` esta activo por defecto y usa siempre el canal logico `general` guardado por el instalador en `config.channels.general.id`. No requiere `GENERAL_CHAT_CHANNEL_ID` ni pide un ID adicional en `.env`.
+
+`/alerta enviar` permite a administradores publicar una alerta en `#general` con tipo y mencion opcional. El comando requiere `Administrator`, no funciona por DM y vuelve a validar permisos dentro del handler. Las menciones se controlan con `allowedMentions`: el texto del mensaje no puede generar menciones arbitrarias; solo se envia `@everyone` o `@here` cuando el administrador elige explicitamente `mencion`.
 
 ## The Isle Evrima Guide
 
