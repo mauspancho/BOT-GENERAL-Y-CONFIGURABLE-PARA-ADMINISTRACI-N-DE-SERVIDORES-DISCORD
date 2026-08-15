@@ -1,4 +1,4 @@
-import type { Client } from "discord.js";
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, type Client } from "discord.js";
 import type { ServerConfig } from "../../core/config/schema.js";
 import type { TikTokRepository } from "../../repositories/tiktokRepository.js";
 import { sendDiscordLog } from "../../services/discordLogService.js";
@@ -8,14 +8,20 @@ import type { TikTokApiClient } from "./tiktokApiClient.js";
 import type {
   TikTokAlertOptions,
   TikTokConnection,
+  TikTokPendingConnection,
   TikTokRuntimeConfig,
   TikTokTokenResponse,
   TikTokUserInfo,
   TikTokVideo,
 } from "./tiktokTypes.js";
+import {
+  TIKTOK_CONNECT_CANCEL_PREFIX,
+  TIKTOK_CONNECT_CONFIRM_PREFIX,
+} from "./tiktokCustomIds.js";
 
 const stateTtlMs = 10 * 60 * 1000;
 const tokenRefreshSkewMs = 5 * 60 * 1000;
+const requiredScopes = ["user.info.basic", "video.list"] as const;
 
 export function createTikTokAuthorization(
   repository: TikTokRepository,
@@ -47,33 +53,68 @@ export async function completeTikTokOAuth(
   const now = values.now ?? new Date();
   const oauthState = repository.consumeOAuthState(values.state, now);
   const token = await api.exchangeCode(values.code);
+  try {
+    validateTikTokScopes(token.scopes);
+  } catch (error) {
+    await api.revokeToken(token.accessToken).catch(() => undefined);
+    throw error;
+  }
+
   const user = await api.getUserInfo(token.accessToken);
   const connection = buildConnection(config.guildId, user, token, runtime, now);
-  repository.upsertConnection(connection);
-
-  const videos = await api.listVideos(token.accessToken).catch(() => []);
-  for (const video of videos) {
-    repository.markVideoPublished(config.guildId, connection.openId, video.id, video.createTime);
-  }
-  repository.updatePollingState(config.guildId, {
-    lastCheckAt: now.toISOString(),
-    lastSuccessAt: now.toISOString(),
-    lastVideoId: videos[0]?.id,
-  });
+  const pending = toPendingConnection(values.state, oauthState.discordUserId, connection, now);
+  repository.createPendingConnection(pending);
+  await notifyPendingTikTokConnection(client, pending);
 
   await sendDiscordLog(
     client,
     config,
     [
       "[TIKTOK]",
-      "OAuth completado.",
+      "OAuth recibido; esperando confirmacion.",
       `Administrador: <@${oauthState.discordUserId}>`,
       `Cuenta: ${connection.displayName}`,
-      "Resultado: OK",
+      "Resultado: PENDIENTE",
     ].join("\n"),
   );
 
-  return repository.findConnection(config.guildId) ?? connection;
+  return connection;
+}
+
+export async function confirmTikTokPendingConnection(
+  repository: TikTokRepository,
+  api: TikTokApiClient,
+  runtime: TikTokRuntimeConfig,
+  values: { state: string; guildId: string; discordUserId: string; now?: Date },
+): Promise<TikTokConnection> {
+  const pending = repository.consumePendingConnection(values.state, values);
+  const connection = toConnection(pending);
+  repository.upsertConnection(connection);
+
+  const accessToken = decryptTikTokToken(pending.encryptedAccessToken, runtime.encryptionKey);
+  const videos = await api.listVideos(accessToken).catch(() => []);
+  for (const video of videos) {
+    repository.markVideoPublished(connection.guildId, connection.openId, video.id, video.createTime);
+  }
+  repository.updatePollingState(connection.guildId, {
+    lastCheckAt: (values.now ?? new Date()).toISOString(),
+    lastSuccessAt: (values.now ?? new Date()).toISOString(),
+    lastVideoId: videos[0]?.id,
+  });
+  repository.deletePendingConnection(values.state);
+  return repository.findConnection(connection.guildId) ?? connection;
+}
+
+export async function cancelTikTokPendingConnection(
+  repository: TikTokRepository,
+  api: TikTokApiClient,
+  runtime: TikTokRuntimeConfig,
+  values: { state: string; guildId: string; discordUserId: string; now?: Date },
+): Promise<void> {
+  const pending = repository.consumePendingConnection(values.state, values);
+  const accessToken = decryptTikTokToken(pending.encryptedAccessToken, runtime.encryptionKey);
+  await api.revokeToken(accessToken).catch(() => undefined);
+  repository.deletePendingConnection(values.state);
 }
 
 export async function refreshTikTokConnectionIfNeeded(
@@ -207,6 +248,73 @@ function buildConnection(
     refreshTokenExpiresAt: new Date(now.getTime() + token.refreshExpiresIn * 1000).toISOString(),
     enabled: true,
   };
+}
+
+function toPendingConnection(
+  state: string,
+  discordUserId: string,
+  connection: TikTokConnection,
+  now: Date,
+): TikTokPendingConnection {
+  return {
+    state,
+    guildId: connection.guildId,
+    discordUserId,
+    openId: connection.openId,
+    displayName: connection.displayName,
+    avatarUrl: connection.avatarUrl,
+    scopes: connection.scopes,
+    encryptedAccessToken: connection.encryptedAccessToken,
+    encryptedRefreshToken: connection.encryptedRefreshToken,
+    connectedAt: connection.connectedAt,
+    accessTokenExpiresAt: connection.accessTokenExpiresAt,
+    refreshTokenExpiresAt: connection.refreshTokenExpiresAt,
+    expiresAt: new Date(now.getTime() + stateTtlMs).toISOString(),
+  };
+}
+
+function toConnection(pending: TikTokPendingConnection): TikTokConnection {
+  return {
+    guildId: pending.guildId,
+    openId: pending.openId,
+    displayName: pending.displayName,
+    avatarUrl: pending.avatarUrl,
+    scopes: pending.scopes,
+    encryptedAccessToken: pending.encryptedAccessToken,
+    encryptedRefreshToken: pending.encryptedRefreshToken,
+    connectedAt: pending.connectedAt,
+    accessTokenExpiresAt: pending.accessTokenExpiresAt,
+    refreshTokenExpiresAt: pending.refreshTokenExpiresAt,
+    enabled: true,
+  };
+}
+
+export function validateTikTokScopes(scopes: string[]): void {
+  const scopeSet = new Set(scopes);
+  const missing = requiredScopes.filter((scope) => !scopeSet.has(scope));
+  if (missing.length > 0) {
+    throw new Error(`TikTok no autorizo los scopes requeridos: ${missing.join(", ")}.`);
+  }
+}
+
+async function notifyPendingTikTokConnection(client: Client, pending: TikTokPendingConnection): Promise<void> {
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${TIKTOK_CONNECT_CONFIRM_PREFIX}${pending.state}`)
+      .setLabel("Confirmar cuenta")
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(`${TIKTOK_CONNECT_CANCEL_PREFIX}${pending.state}`)
+      .setLabel("Cancelar")
+      .setStyle(ButtonStyle.Secondary),
+  );
+  const message = [`Cuenta TikTok detectada:`, pending.displayName, "", "Confirma si esta es la cuenta correcta."].join("\n");
+  await client.users.fetch(pending.discordUserId).then((user) =>
+    user.send({
+      content: message,
+      components: [row],
+    }),
+  );
 }
 
 async function publishTikTokVideo(

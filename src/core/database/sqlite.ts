@@ -104,6 +104,26 @@ const migrations = [
       );
     `,
   },
+  {
+    id: 3,
+    sql: `
+      CREATE TABLE IF NOT EXISTS tiktok_pending_connections (
+        state TEXT PRIMARY KEY,
+        guild_id TEXT NOT NULL,
+        discord_user_id TEXT NOT NULL,
+        open_id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        avatar_url TEXT,
+        scopes TEXT NOT NULL,
+        encrypted_access_token TEXT NOT NULL,
+        encrypted_refresh_token TEXT NOT NULL,
+        connected_at TEXT NOT NULL,
+        access_token_expires_at TEXT NOT NULL,
+        refresh_token_expires_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+      );
+    `,
+  },
 ];
 
 export async function openDatabase(databasePath: string): Promise<Database> {

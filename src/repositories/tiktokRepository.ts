@@ -1,5 +1,5 @@
 import type { Database, SqlRow } from "../core/database/sqlite.js";
-import type { TikTokConnection, TikTokOAuthState } from "../modules/tiktokAlerts/tiktokTypes.js";
+import type { TikTokConnection, TikTokOAuthState, TikTokPendingConnection } from "../modules/tiktokAlerts/tiktokTypes.js";
 
 interface TikTokConnectionRow extends SqlRow {
   guild_id: string;
@@ -25,6 +25,22 @@ interface TikTokStateRow extends SqlRow {
   created_at: string;
   expires_at: string;
   used: number;
+}
+
+interface TikTokPendingConnectionRow extends SqlRow {
+  state: string;
+  guild_id: string;
+  discord_user_id: string;
+  open_id: string;
+  display_name: string;
+  avatar_url: string | null;
+  scopes: string;
+  encrypted_access_token: string;
+  encrypted_refresh_token: string;
+  connected_at: string;
+  access_token_expires_at: string;
+  refresh_token_expires_at: string;
+  expires_at: string;
 }
 
 export class TikTokRepository {
@@ -104,6 +120,61 @@ export class TikTokRepository {
       );
   }
 
+  public createPendingConnection(connection: TikTokPendingConnection): void {
+    this.database
+      .prepare(
+        `INSERT OR REPLACE INTO tiktok_pending_connections
+          (state, guild_id, discord_user_id, open_id, display_name, avatar_url, scopes,
+           encrypted_access_token, encrypted_refresh_token, connected_at, access_token_expires_at,
+           refresh_token_expires_at, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        connection.state,
+        connection.guildId,
+        connection.discordUserId,
+        connection.openId,
+        connection.displayName,
+        connection.avatarUrl ?? null,
+        connection.scopes.join(","),
+        connection.encryptedAccessToken,
+        connection.encryptedRefreshToken,
+        connection.connectedAt,
+        connection.accessTokenExpiresAt,
+        connection.refreshTokenExpiresAt,
+        connection.expiresAt,
+      );
+  }
+
+  public findPendingConnection(state: string): TikTokPendingConnection | undefined {
+    const row = this.database
+      .prepare("SELECT * FROM tiktok_pending_connections WHERE state = ?")
+      .get(state) as TikTokPendingConnectionRow | undefined;
+    return row ? mapPendingConnection(row) : undefined;
+  }
+
+  public consumePendingConnection(
+    state: string,
+    values: { guildId: string; discordUserId: string; now?: Date },
+  ): TikTokPendingConnection {
+    const pending = this.findPendingConnection(state);
+    if (!pending) {
+      throw new Error("Conexion TikTok pendiente no encontrada.");
+    }
+    if (pending.guildId !== values.guildId || pending.discordUserId !== values.discordUserId) {
+      throw new Error("Solo quien inicio la conexion puede confirmarla en este servidor.");
+    }
+    if (new Date(pending.expiresAt).getTime() <= (values.now ?? new Date()).getTime()) {
+      this.deletePendingConnection(state);
+      throw new Error("La confirmacion TikTok expiro.");
+    }
+    return pending;
+  }
+
+  public deletePendingConnection(state: string): void {
+    this.database.prepare("DELETE FROM tiktok_pending_connections WHERE state = ?").run(state);
+  }
+
   public findConnection(guildId: string): TikTokConnection | undefined {
     const row = this.database
       .prepare("SELECT * FROM tiktok_connections WHERE guild_id = ?")
@@ -164,6 +235,7 @@ export class TikTokRepository {
   public deleteConnection(guildId: string): void {
     this.database.prepare("DELETE FROM tiktok_connections WHERE guild_id = ?").run(guildId);
     this.database.prepare("DELETE FROM tiktok_oauth_states WHERE guild_id = ?").run(guildId);
+    this.database.prepare("DELETE FROM tiktok_pending_connections WHERE guild_id = ?").run(guildId);
   }
 
   public hasPublishedVideo(guildId: string, openId: string, videoId: string): boolean {
@@ -212,5 +284,23 @@ function mapConnection(row: TikTokConnectionRow): TikTokConnection {
     lastCheckAt: row.last_check_at ?? undefined,
     lastSuccessAt: row.last_success_at ?? undefined,
     lastVideoId: row.last_video_id ?? undefined,
+  };
+}
+
+function mapPendingConnection(row: TikTokPendingConnectionRow): TikTokPendingConnection {
+  return {
+    state: row.state,
+    guildId: row.guild_id,
+    discordUserId: row.discord_user_id,
+    openId: row.open_id,
+    displayName: row.display_name,
+    avatarUrl: row.avatar_url ?? undefined,
+    scopes: row.scopes.split(",").filter(Boolean),
+    encryptedAccessToken: row.encrypted_access_token,
+    encryptedRefreshToken: row.encrypted_refresh_token,
+    connectedAt: row.connected_at,
+    accessTokenExpiresAt: row.access_token_expires_at,
+    refreshTokenExpiresAt: row.refresh_token_expires_at,
+    expiresAt: row.expires_at,
   };
 }

@@ -15,9 +15,10 @@ import {
   sendTikTokTestAlert,
 } from "../modules/tiktokAlerts/tiktokAlertService.js";
 import { loadTikTokRuntimeConfig } from "../modules/tiktokAlerts/tiktokEnv.js";
-
-export const TIKTOK_DISCONNECT_CONFIRM_PREFIX = "tiktok:disconnect:confirm:";
-export const TIKTOK_DISCONNECT_CANCEL_PREFIX = "tiktok:disconnect:cancel:";
+import {
+  TIKTOK_DISCONNECT_CANCEL_PREFIX,
+  TIKTOK_DISCONNECT_CONFIRM_PREFIX,
+} from "../modules/tiktokAlerts/tiktokCustomIds.js";
 
 export const tiktokCommand: SlashCommand = {
   name: "tiktok",

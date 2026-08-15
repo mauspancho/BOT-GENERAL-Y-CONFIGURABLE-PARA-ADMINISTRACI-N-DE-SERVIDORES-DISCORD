@@ -41,7 +41,15 @@ export function loadTikTokRuntimeConfig(env: NodeJS.ProcessEnv = process.env): T
 }
 
 export function hasTikTokCredentials(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(env.TIKTOK_CLIENT_KEY && env.TIKTOK_CLIENT_SECRET && env.TIKTOK_TOKEN_ENCRYPTION_KEY);
+  if (!env.TIKTOK_CLIENT_KEY || !env.TIKTOK_CLIENT_SECRET || !env.TIKTOK_TOKEN_ENCRYPTION_KEY) {
+    return false;
+  }
+  try {
+    parseEncryptionKey(env.TIKTOK_TOKEN_ENCRYPTION_KEY);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function parseEncryptionKey(value: string): Buffer {

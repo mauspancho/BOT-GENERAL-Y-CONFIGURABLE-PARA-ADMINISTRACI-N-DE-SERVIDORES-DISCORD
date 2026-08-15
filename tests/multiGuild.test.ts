@@ -12,6 +12,7 @@ import type { TikTokApiClient } from "../src/modules/tiktokAlerts/tiktokApiClien
 import {
   checkTikTokVideos,
   completeTikTokOAuth,
+  confirmTikTokPendingConnection,
   createTikTokAuthorization,
   refreshTikTokConnectionIfNeeded,
 } from "../src/modules/tiktokAlerts/tiktokAlertService.js";
@@ -70,8 +71,10 @@ describe("multi-guild isolation", () => {
     await fetch(`http://127.0.0.1:${port}/tiktok/callback?code=code-maus&state=${mausAuth.state}`);
     await fetch(`http://127.0.0.1:${port}/tiktok/callback?code=code-chepe&state=${chepeAuth.state}`);
 
-    expect(repository.findConnection("guild-chepe")?.openId).toBe("open-chepe");
-    expect(repository.findConnection("guild-maus")?.openId).toBe("open-maus");
+    expect(repository.findConnection("guild-chepe")).toBeUndefined();
+    expect(repository.findConnection("guild-maus")).toBeUndefined();
+    expect(repository.findPendingConnection(chepeAuth.state)?.openId).toBe("open-chepe");
+    expect(repository.findPendingConnection(mausAuth.state)?.openId).toBe("open-maus");
     await server.stop();
     database.close();
   });
@@ -237,6 +240,12 @@ async function connectedTwoGuilds(database: Awaited<ReturnType<typeof openMemory
       code: guildId.includes("chepe") ? "code-chepe" : "code-maus",
       now: new Date(2_000_000),
     });
+    await confirmTikTokPendingConnection(repository, api, runtime(), {
+      state: auth.state,
+      guildId,
+      discordUserId: `admin-${guildId}`,
+      now: new Date(2_000_000),
+    });
   }
   return repository;
 }
@@ -322,6 +331,9 @@ function makeClient() {
           },
         }),
       ),
+    },
+    users: {
+      fetch: vi.fn(() => Promise.resolve({ send: vi.fn(() => Promise.resolve()) })),
     },
   };
 }

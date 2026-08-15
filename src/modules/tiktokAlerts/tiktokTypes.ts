@@ -35,6 +35,22 @@ export interface TikTokConnection {
   lastVideoId?: string | undefined;
 }
 
+export interface TikTokPendingConnection {
+  state: string;
+  guildId: string;
+  discordUserId: string;
+  openId: string;
+  displayName: string;
+  avatarUrl?: string | undefined;
+  scopes: string[];
+  encryptedAccessToken: string;
+  encryptedRefreshToken: string;
+  connectedAt: string;
+  accessTokenExpiresAt: string;
+  refreshTokenExpiresAt: string;
+  expiresAt: string;
+}
+
 export interface TikTokTokenResponse {
   openId: string;
   scopes: string[];

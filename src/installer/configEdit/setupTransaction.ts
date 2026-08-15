@@ -7,6 +7,7 @@ import { applyStructurePlan, preflightStructurePlan, type StructureChange } from
 import { applyPlannedFileOperations, type PlannedFileOperation } from "./plannedFileOperations.js";
 import { jsonEqual } from "./configDiff.js";
 import type { ConfigSection, GuildConfigEditSession } from "./GuildConfigEditSession.js";
+import { validateModuleDependencies } from "./modulePrecheck.js";
 
 export interface ConfigEditTransactionOptions {
   session: GuildConfigEditSession;
@@ -19,6 +20,7 @@ export interface ConfigEditTransactionOptions {
   ensureRulesPanel?: (config: ServerConfig) => Promise<void>;
   auditPath?: string;
   actor?: string;
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface ConfigEditTransactionResult {
@@ -36,33 +38,53 @@ export async function applyConfigEditTransaction(
     return { applied: false, reason: "no-op", structureChanges: [] };
   }
 
-  if (options.guild && shouldRunPreflight(options.session.sections(), Boolean(options.applyDiscordStructure))) {
+  if (options.guild && shouldRunPreflight(original, working, options.session.sections(), Boolean(options.applyDiscordStructure))) {
     const preflight = preflightStructurePlan(options.guild, working);
     if (!preflight.ok) {
       throw new Error(`Preflight invalido: ${preflight.errors.join("; ")}`);
     }
   }
 
+  const dependencyErrors = validateModuleDependencies(working, options.env);
+  if (dependencyErrors.length > 0) {
+    throw new Error(`Precheck invalido: ${dependencyErrors.join("; ")}`);
+  }
+
   options.backup();
-  applyPlannedFileOperations(options.fileOperations ?? []);
+  const rollbackFiles = applyPlannedFileOperations(options.fileOperations ?? []);
+  let structureChanges: StructureChange[] = [];
+  try {
+    structureChanges =
+      options.applyDiscordStructure && options.guild ? await applyStructurePlan(options.guild, working) : [];
 
-  const structureChanges =
-    options.applyDiscordStructure && options.guild ? await applyStructurePlan(options.guild, working) : [];
-  options.configManager.save(working.guildId, working);
-
-  if (shouldRegisterCommands(original, working)) {
-    await options.registerCommands?.(working);
+    if (shouldRegisterCommands(original, working)) {
+      await options.registerCommands?.(working);
+    }
+    if (shouldEnsureRulesPanel(original, working, options.session.sections())) {
+      await options.ensureRulesPanel?.(working);
+    }
+    options.configManager.save(working.guildId, working);
+    appendAudit(options.auditPath, working.guildId, options.actor ?? "CLI", options.session.sections(), "OK");
+  } catch (error) {
+    rollbackFiles();
+    throw error;
   }
-  if (shouldEnsureRulesPanel(original, working, options.session.sections())) {
-    await options.ensureRulesPanel?.(working);
-  }
-  appendAudit(options.auditPath, working.guildId, options.actor ?? "CLI", options.session.sections(), "OK");
 
   return { applied: true, structureChanges };
 }
 
-function shouldRunPreflight(changedSections: ConfigSection[], applyDiscordStructure: boolean): boolean {
-  return applyDiscordStructure || changedSections.includes("structure") || changedSections.includes("modules");
+function shouldRunPreflight(
+  original: ServerConfig,
+  working: ServerConfig,
+  changedSections: ConfigSection[],
+  applyDiscordStructure: boolean,
+): boolean {
+  return (
+    applyDiscordStructure ||
+    changedSections.includes("structure") ||
+    changedSections.includes("modules") ||
+    !jsonEqual(original.modules, working.modules)
+  );
 }
 
 export function shouldRegisterCommands(original: ServerConfig, working: ServerConfig): boolean {

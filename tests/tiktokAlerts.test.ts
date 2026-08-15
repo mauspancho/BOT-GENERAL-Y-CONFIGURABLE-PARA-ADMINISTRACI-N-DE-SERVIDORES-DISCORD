@@ -11,7 +11,15 @@ import { openMemoryDatabase } from "../src/core/database/sqlite.js";
 import { preflightStructurePlan } from "../src/installer/discord/setupDiscord.js";
 import { readEnvFile, writeEnvFile } from "../src/installer/wizard/envWriter.js";
 import { enabledModules } from "../src/modules/index.js";
-import { checkTikTokVideos, completeTikTokOAuth, createTikTokAuthorization, refreshTikTokConnectionIfNeeded, sendTikTokTestAlert } from "../src/modules/tiktokAlerts/tiktokAlertService.js";
+import {
+  cancelTikTokPendingConnection,
+  checkTikTokVideos,
+  completeTikTokOAuth,
+  confirmTikTokPendingConnection,
+  createTikTokAuthorization,
+  refreshTikTokConnectionIfNeeded,
+  sendTikTokTestAlert,
+} from "../src/modules/tiktokAlerts/tiktokAlertService.js";
 import { TikTokApiClient } from "../src/modules/tiktokAlerts/tiktokApiClient.js";
 import { TikTokCallbackServer } from "../src/modules/tiktokAlerts/tiktokCallbackServer.js";
 import { decryptTikTokToken } from "../src/modules/tiktokAlerts/tiktokCrypto.js";
@@ -108,7 +116,7 @@ describe("tiktok alerts", () => {
     database.close();
   });
 
-  it("exchanges token, reads user info and stores encrypted tokens", async () => {
+  it("exchanges token, reads user info and creates encrypted pending connection", async () => {
     const database = await openMemoryDatabase();
     const repository = new TikTokRepository(database);
     const api = makeApi();
@@ -119,12 +127,114 @@ describe("tiktok alerts", () => {
       state: auth.state,
       code: "code",
     });
-    const connection = repository.findConnection("guild");
+    const pending = repository.findPendingConnection(auth.state);
 
-    expect(connection?.displayName).toBe("CuentaTikTok");
-    expect(connection?.encryptedAccessToken).not.toBe("access-1");
-    expect(decryptTikTokToken(connection?.encryptedAccessToken ?? "", runtime().encryptionKey)).toBe("access-1");
+    expect(repository.findConnection("guild")).toBeUndefined();
+    expect(pending?.displayName).toBe("CuentaTikTok");
+    expect(pending?.encryptedAccessToken).not.toBe("access-1");
+    expect(decryptTikTokToken(pending?.encryptedAccessToken ?? "", runtime().encryptionKey)).toBe("access-1");
     expect(JSON.stringify(client.logSend.mock.calls)).not.toContain("access-1");
+    expect(firstDmPayload(client).content).toContain("CuentaTikTok");
+    database.close();
+  });
+
+  it("confirming pending connection stores connection and creates baseline", async () => {
+    const database = await openMemoryDatabase();
+    const repository = new TikTokRepository(database);
+    const api = makeApi({ videos: [video("old", 1_000)] });
+    const auth = createTikTokAuthorization(repository, api, { guildId: "guild", discordUserId: "admin" });
+    await completeTikTokOAuth(makeClient() as never, makeConfig(true), repository, api, runtime(), {
+      state: auth.state,
+      code: "code",
+      now: new Date(2_000_000),
+    });
+
+    await confirmTikTokPendingConnection(repository, api, runtime(), {
+      state: auth.state,
+      guildId: "guild",
+      discordUserId: "admin",
+      now: new Date(2_000_000),
+    });
+
+    expect(repository.findConnection("guild")?.enabled).toBe(true);
+    expect(repository.findPendingConnection(auth.state)).toBeUndefined();
+    expect(repository.hasPublishedVideo("guild", "open-id", "old")).toBe(true);
+    database.close();
+  });
+
+  it("canceling pending connection revokes token and does not connect", async () => {
+    const database = await openMemoryDatabase();
+    const repository = new TikTokRepository(database);
+    const api = makeApi();
+    const auth = createTikTokAuthorization(repository, api, { guildId: "guild", discordUserId: "admin" });
+    await completeTikTokOAuth(makeClient() as never, makeConfig(true), repository, api, runtime(), {
+      state: auth.state,
+      code: "code",
+    });
+
+    await cancelTikTokPendingConnection(repository, api, runtime(), {
+      state: auth.state,
+      guildId: "guild",
+      discordUserId: "admin",
+    });
+
+    expect(repository.findConnection("guild")).toBeUndefined();
+    expect(repository.findPendingConnection(auth.state)).toBeUndefined();
+    expectRevokeCalled(api, "access-1");
+    database.close();
+  });
+
+  it("pending confirmation is scoped to guild and Discord user", async () => {
+    const database = await openMemoryDatabase();
+    const repository = new TikTokRepository(database);
+    const api = makeApi();
+    const auth = createTikTokAuthorization(repository, api, { guildId: "guild", discordUserId: "admin" });
+    await completeTikTokOAuth(makeClient() as never, makeConfig(true), repository, api, runtime(), {
+      state: auth.state,
+      code: "code",
+    });
+
+    expect(() =>
+      repository.consumePendingConnection(auth.state, { guildId: "other", discordUserId: "admin" }),
+    ).toThrow(/servidor|confirmarla/i);
+    expect(() =>
+      repository.consumePendingConnection(auth.state, { guildId: "guild", discordUserId: "other" }),
+    ).toThrow(/confirmarla/i);
+    expect(repository.findConnection("guild")).toBeUndefined();
+    database.close();
+  });
+
+  it("rejects incomplete scopes and revokes token without pending", async () => {
+    const database = await openMemoryDatabase();
+    const repository = new TikTokRepository(database);
+    const api = makeApi({ exchange: { ...token("access-1", "refresh-1"), scopes: ["user.info.basic"] } });
+    const auth = createTikTokAuthorization(repository, api, { guildId: "guild", discordUserId: "admin" });
+
+    await expect(
+      completeTikTokOAuth(makeClient() as never, makeConfig(true), repository, api, runtime(), {
+        state: auth.state,
+        code: "code",
+      }),
+    ).rejects.toThrow(/video.list/);
+
+    expect(repository.findPendingConnection(auth.state)).toBeUndefined();
+    expect(repository.findConnection("guild")).toBeUndefined();
+    expectRevokeCalled(api, "access-1");
+    database.close();
+  });
+
+  it("accepts required scopes in any order", async () => {
+    const database = await openMemoryDatabase();
+    const repository = new TikTokRepository(database);
+    const api = makeApi({ exchange: { ...token("access-1", "refresh-1"), scopes: ["video.list", "user.info.basic"] } });
+    const auth = createTikTokAuthorization(repository, api, { guildId: "guild", discordUserId: "admin" });
+
+    await completeTikTokOAuth(makeClient() as never, makeConfig(true), repository, api, runtime(), {
+      state: auth.state,
+      code: "code",
+    });
+
+    expect(repository.findPendingConnection(auth.state)).toBeDefined();
     database.close();
   });
 
@@ -278,6 +388,25 @@ describe("tiktok alerts", () => {
     database.close();
   });
 
+  it("serves public homepage, terms and privacy pages", async () => {
+    const database = await openMemoryDatabase();
+    const server = new TikTokCallbackServer(makeClient() as never, makeConfigManager([makeConfig(true)]), new TikTokRepository(database), makeApi(), runtime());
+    await server.start();
+    const address = server.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+
+    const home = await fetch(`http://127.0.0.1:${port}/`);
+    const terms = await fetch(`http://127.0.0.1:${port}/terms`);
+    const privacy = await fetch(`http://127.0.0.1:${port}/privacy`);
+
+    expect(home.status).toBe(200);
+    expect(await home.text()).toContain("LinuxRed Connect");
+    expect(terms.status).toBe(200);
+    expect(privacy.status).toBe(200);
+    await server.stop();
+    database.close();
+  });
+
   it("setup env writer preserves variables and creates encryption key once", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "tiktok-env-"));
     cleanupPaths.push(tempDir);
@@ -415,6 +544,12 @@ async function connectedRepository(database: Awaited<ReturnType<typeof openMemor
     code: "code",
     now: new Date(2_000_000),
   });
+  await confirmTikTokPendingConnection(repository, api, runtime(), {
+    state: auth.state,
+    guildId: "guild",
+    discordUserId: "admin",
+    now: new Date(2_000_000),
+  });
   return repository;
 }
 
@@ -507,9 +642,14 @@ function makeClient() {
     void payload;
     return Promise.resolve();
   });
+  const dmSend = vi.fn((payload: unknown) => {
+    void payload;
+    return Promise.resolve();
+  });
   return {
     generalSend,
     logSend,
+    dmSend,
     channels: {
       fetch: vi.fn((id: string) =>
         Promise.resolve(
@@ -518,6 +658,9 @@ function makeClient() {
             : { id, name: "logs", type: ChannelType.GuildText, send: logSend },
         ),
       ),
+    },
+    users: {
+      fetch: vi.fn(() => Promise.resolve({ send: dmSend })),
     },
   };
 }
@@ -528,6 +671,23 @@ function firstAlertPayload(client: ReturnType<typeof makeClient>): AlertPayload 
     throw new Error("No alert payload.");
   }
   return payload;
+}
+
+function firstDmPayload(client: ReturnType<typeof makeClient>): { content: string } {
+  const payload = client.dmSend.mock.calls[0]?.[0];
+  if (!isContentPayload(payload)) {
+    throw new Error("No DM payload.");
+  }
+  return payload;
+}
+
+function isContentPayload(value: unknown): value is { content: string } {
+  return Boolean(value) && typeof value === "object" && typeof (value as { content?: unknown }).content === "string";
+}
+
+function expectRevokeCalled(api: TikTokApiClient, tokenValue: string): void {
+  const calls = (api.revokeToken as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+  expect(calls).toContainEqual([tokenValue]);
 }
 
 function makeInteraction(subcommand: string, options: {

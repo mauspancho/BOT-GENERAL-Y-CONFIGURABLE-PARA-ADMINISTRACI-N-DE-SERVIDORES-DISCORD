@@ -8,7 +8,14 @@ export type PlannedFileOperation =
   | { type: "copyFile"; sourcePath: string; targetPath: string }
   | { type: "patchEnv"; envPath: string; values: Record<string, string>; ensureTikTokEncryptionKey?: boolean };
 
-export function applyPlannedFileOperations(operations: PlannedFileOperation[]): void {
+interface FileSnapshot {
+  path: string;
+  existed: boolean;
+  content?: Buffer;
+}
+
+export function applyPlannedFileOperations(operations: PlannedFileOperation[]): () => void {
+  const snapshots = captureSnapshots(operations);
   for (const operation of operations) {
     if (operation.type === "writeText") {
       writeTextFileAtomic(operation.path, operation.content);
@@ -23,6 +30,7 @@ export function applyPlannedFileOperations(operations: PlannedFileOperation[]): 
 
     applyEnvPatch(operation);
   }
+  return () => restoreSnapshots(snapshots);
 }
 
 function applyEnvPatch(operation: Extract<PlannedFileOperation, { type: "patchEnv" }>): void {
@@ -31,7 +39,7 @@ function applyEnvPatch(operation: Extract<PlannedFileOperation, { type: "patchEn
   for (const [key, value] of Object.entries(operation.values)) {
     next.set(key, value);
   }
-  if (operation.ensureTikTokEncryptionKey && !next.has("TIKTOK_TOKEN_ENCRYPTION_KEY")) {
+  if (operation.ensureTikTokEncryptionKey && !hasValidEncryptionKey(next.get("TIKTOK_TOKEN_ENCRYPTION_KEY"))) {
     next.set("TIKTOK_TOKEN_ENCRYPTION_KEY", cryptoRandomBase64());
   }
 
@@ -73,4 +81,43 @@ function serializeEnv(order: string[], values: Map<string, string>): string {
 
 function cryptoRandomBase64(): string {
   return crypto.randomBytes(32).toString("base64");
+}
+
+function captureSnapshots(operations: PlannedFileOperation[]): FileSnapshot[] {
+  const targets = new Set<string>();
+  for (const operation of operations) {
+    if (operation.type === "writeText") {
+      targets.add(operation.path);
+    }
+    if (operation.type === "copyFile") {
+      targets.add(operation.targetPath);
+    }
+    if (operation.type === "patchEnv") {
+      targets.add(operation.envPath);
+    }
+  }
+
+  return [...targets].map((targetPath) => ({
+    path: targetPath,
+    existed: fs.existsSync(targetPath),
+    ...(fs.existsSync(targetPath) ? { content: fs.readFileSync(targetPath) } : {}),
+  }));
+}
+
+function restoreSnapshots(snapshots: FileSnapshot[]): void {
+  for (const snapshot of [...snapshots].reverse()) {
+    if (!snapshot.existed) {
+      fs.rmSync(snapshot.path, { force: true });
+      continue;
+    }
+    fs.mkdirSync(path.dirname(snapshot.path), { recursive: true });
+    fs.writeFileSync(snapshot.path, snapshot.content ?? Buffer.alloc(0));
+  }
+}
+
+function hasValidEncryptionKey(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  return Buffer.from(value, "base64").length === 32 || Buffer.from(value, "hex").length === 32;
 }

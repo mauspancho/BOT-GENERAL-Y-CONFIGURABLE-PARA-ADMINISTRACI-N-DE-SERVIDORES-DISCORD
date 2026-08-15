@@ -45,9 +45,15 @@ import {
   ensureLogicalChannel,
 } from "../installer/configEdit/sectionPatches.js";
 import { isManagedRulesPath, readRulesForDisplay } from "../installer/configEdit/rulesStorage.js";
+import { readServerConfig } from "../core/config/configStore.js";
+import {
+  canKeepTikTokDeveloperCredentials,
+  hasValidTikTokEncryptionKey,
+} from "../installer/configEdit/tiktokDeveloperSetup.js";
 
 async function main(): Promise<void> {
   const configManager = new GuildConfigManager();
+  await resolveLegacyConflict(configManager);
   configManager.migrateLegacyConfig();
   console.log("========================================");
   console.log("      Discord Community Bot Setup");
@@ -200,10 +206,12 @@ async function collectTikTokDeveloperFileOperations(): Promise<PlannedFileOperat
 
   const action = await select<"keep" | "modify">({
     message: "Credenciales TikTok Developer:",
-    choices: [
-      { name: "Mantener credenciales existentes", value: "keep" },
-      { name: "Modificar credenciales", value: "modify" },
-    ],
+    choices: canKeepTikTokDeveloperCredentials(current)
+      ? [
+          { name: "Mantener credenciales existentes", value: "keep" },
+          { name: "Modificar credenciales", value: "modify" },
+        ]
+      : [{ name: "Configurar credenciales", value: "modify" }],
   });
 
   if (action === "modify") {
@@ -254,7 +262,7 @@ function printTikTokDeveloperStatus(current: Map<string, string>): void {
   console.log(`Client Secret: ${current.has("TIKTOK_CLIENT_SECRET") ? "configurado" : "no configurado"}`);
   console.log(`Redirect URI: ${current.get("TIKTOK_REDIRECT_URI") ?? "https://tiktok.linuxred.lat/tiktok/callback"}`);
   console.log(`Callback: ${current.get("TIKTOK_CALLBACK_HOST") ?? "127.0.0.1"}:${current.get("TIKTOK_CALLBACK_PORT") ?? "8787"}`);
-  console.log(`Encryption Key: ${current.has("TIKTOK_TOKEN_ENCRYPTION_KEY") ? "configurada" : "no configurada"}\n`);
+  console.log(`Encryption Key: ${hasValidTikTokEncryptionKey(current) ? "configurada" : "no configurada"}\n`);
 }
 
 async function runStructureOnly(configManager: GuildConfigManager): Promise<void> {
@@ -665,6 +673,7 @@ async function applyModifySession(
     fileOperations,
     applyDiscordStructure,
     auditPath: "logs/setup-audit.jsonl",
+    env: buildPrecheckEnv(fileOperations),
     ...(guild ? { guild } : {}),
     ...(env ? { registerCommands: (config: ServerConfig) => registerGuildCommands(env.DISCORD_TOKEN, env.DISCORD_CLIENT_ID, config) } : {}),
     ...(client && database
@@ -675,6 +684,20 @@ async function applyModifySession(
   database?.close();
   await client?.destroy();
   console.log(result.applied ? "Cambios aplicados." : "No hay cambios para aplicar.");
+}
+
+function buildPrecheckEnv(fileOperations: PlannedFileOperation[]): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const operation of fileOperations) {
+    if (operation.type !== "patchEnv") {
+      continue;
+    }
+    Object.assign(env, operation.values);
+    if (operation.ensureTikTokEncryptionKey && !hasValidTikTokEncryptionKey(new Map(Object.entries(env) as Array<[string, string]>))) {
+      env.TIKTOK_TOKEN_ENCRYPTION_KEY = Buffer.alloc(32, 1).toString("base64");
+    }
+  }
+  return env;
 }
 
 async function loginAndFetchGuild(client: ReturnType<typeof createDiscordClient>, token: string, guildId: string) {
@@ -709,6 +732,53 @@ function showConfiguredGuilds(configManager: GuildConfigManager): void {
 
   for (const config of configs) {
     console.log(`${config.communityName} (${config.guildId}) - ${configManager.pathFor(config.guildId)}`);
+  }
+}
+
+async function resolveLegacyConflict(configManager: GuildConfigManager): Promise<void> {
+  const conflict = configManager.findLegacyConflict();
+  if (!conflict) {
+    return;
+  }
+
+  let resolved = false;
+  while (!resolved) {
+    const action = await select<"compare" | "multi" | "legacy" | "cancel">({
+      message: "Se encontraron dos configuraciones para este servidor:",
+      choices: [
+        { name: "Comparar", value: "compare" },
+        { name: "Usar configuracion multi-guild actual", value: "multi" },
+        { name: "Importar/restaurar legacy", value: "legacy" },
+        { name: "Cancelar", value: "cancel" },
+      ],
+    });
+
+    if (action === "compare") {
+      const legacy = readServerConfig(conflict.legacyPath);
+      const current = readServerConfig(conflict.guildPath);
+      console.log(formatConfigDiff(current, legacy));
+      continue;
+    }
+
+    if (action === "multi") {
+      console.log("Se mantiene la configuracion multi-guild actual.");
+      resolved = true;
+      continue;
+    }
+
+    if (action === "legacy") {
+      const shouldImport = await confirm({ message: "Crear backup e importar legacy sobre la config multi-guild?", default: false });
+      if (!shouldImport) {
+        continue;
+      }
+      createBackup("pre-legacy-import");
+      configManager.importLegacyConfig(conflict.guildId);
+      console.log("Config legacy importada.");
+      resolved = true;
+      continue;
+    }
+
+    throw new Error("Setup cancelado por conflicto legacy/multi-guild.");
   }
 }
 

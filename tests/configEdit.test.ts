@@ -25,6 +25,7 @@ import {
 import { managedRulesAbsolutePath, managedRulesSourcePath } from "../src/installer/configEdit/rulesStorage.js";
 import { preflightStructurePlan } from "../src/installer/discord/setupDiscord.js";
 import { makeGuildMock } from "./support/discordMocks.js";
+import { canKeepTikTokDeveloperCredentials } from "../src/installer/configEdit/tiktokDeveloperSetup.js";
 
 describe("patch-based guild config editing", () => {
   it("modifying TikTok Chepe preserves unrelated sections exactly", () => {
@@ -203,10 +204,85 @@ describe("patch-based guild config editing", () => {
 
     patchTikTokAlerts(session.getWorking(), { enabled: true });
     session.markChanged("tiktokAlerts");
-    await applyConfigEditTransaction({ session, configManager: manager, backup: vi.fn() });
+    await applyConfigEditTransaction({ session, configManager: manager, backup: vi.fn(), env: validTikTokEnv() });
 
     expect(manager.get("guild-chepe").modules.tiktokAlerts).toBe(true);
     expect(manager.get("guild-maus").modules.tiktokAlerts).toBe(false);
+  });
+
+  it("activating TikTok runs precheck and fails without generalAlerts before writing", async () => {
+    const root = tempRoot();
+    const manager = managerFor(root);
+    const config = configFor("guild-chepe");
+    config.modules.generalAlerts = false;
+    manager.save(config.guildId, config);
+    const session = new GuildConfigEditSession(manager.get(config.guildId));
+    patchTikTokAlerts(session.getWorking(), { enabled: true });
+    session.markChanged("tiktokAlerts");
+    const backup = vi.fn();
+
+    await expect(
+      applyConfigEditTransaction({ session, configManager: manager, backup, env: validTikTokEnv() }),
+    ).rejects.toThrow(/generalAlerts/);
+
+    expect(backup).not.toHaveBeenCalled();
+    expect(manager.get(config.guildId)).toEqual(config);
+  });
+
+  it("activating TikTok fails without general channel id before writing", async () => {
+    const root = tempRoot();
+    const manager = managerFor(root);
+    const config = configFor("guild-chepe");
+    delete config.channels.general!.id;
+    manager.save(config.guildId, config);
+    const session = new GuildConfigEditSession(manager.get(config.guildId));
+    patchTikTokAlerts(session.getWorking(), { enabled: true });
+    session.markChanged("tiktokAlerts");
+    const backup = vi.fn();
+
+    await expect(
+      applyConfigEditTransaction({ session, configManager: manager, backup, env: validTikTokEnv() }),
+    ).rejects.toThrow(/general\.id/);
+
+    expect(backup).not.toHaveBeenCalled();
+    expect(manager.get(config.guildId)).toEqual(config);
+  });
+
+  it("activating TikTok fails without complete Developer credentials before writing", async () => {
+    const root = tempRoot();
+    const manager = managerFor(root);
+    const config = configFor("guild-chepe");
+    manager.save(config.guildId, config);
+    const session = new GuildConfigEditSession(manager.get(config.guildId));
+    patchTikTokAlerts(session.getWorking(), { enabled: true });
+    session.markChanged("tiktokAlerts");
+    const backup = vi.fn();
+
+    await expect(
+      applyConfigEditTransaction({ session, configManager: manager, backup, env: { TIKTOK_CLIENT_KEY: "key" } }),
+    ).rejects.toThrow(/Developer/);
+
+    expect(backup).not.toHaveBeenCalled();
+  });
+
+  it("activating generalAlerts fails without general channel id before writing", async () => {
+    const root = tempRoot();
+    const manager = managerFor(root);
+    const config = configFor("guild-chepe");
+    config.modules.generalAlerts = false;
+    delete config.channels.general!.id;
+    manager.save(config.guildId, config);
+    const session = new GuildConfigEditSession(manager.get(config.guildId));
+    session.getWorking().modules.generalAlerts = true;
+    session.markChanged("generalAlerts");
+    const backup = vi.fn();
+
+    await expect(
+      applyConfigEditTransaction({ session, configManager: manager, backup }),
+    ).rejects.toThrow(/generalAlerts/);
+
+    expect(backup).not.toHaveBeenCalled();
+    expect(manager.get(config.guildId)).toEqual(config);
   });
 
   it("configuring TikTok Developer global does not modify guild JSON", () => {
@@ -241,6 +317,15 @@ describe("patch-based guild config editing", () => {
     expect(env).toContain("NODE_ENV=production");
     expect(env).toContain("CUSTOM_FLAG=yes");
     expect(env).toContain("TIKTOK_CLIENT_SECRET=new");
+  });
+
+  it("Client Key or Secret missing does not allow keeping TikTok Developer credentials", () => {
+    expect(canKeepTikTokDeveloperCredentials(new Map([["TIKTOK_CLIENT_KEY", "key"]]))).toBe(false);
+    expect(canKeepTikTokDeveloperCredentials(new Map([["TIKTOK_CLIENT_SECRET", "secret"]]))).toBe(false);
+    expect(canKeepTikTokDeveloperCredentials(new Map([
+      ["TIKTOK_CLIENT_KEY", "key"],
+      ["TIKTOK_CLIENT_SECRET", "secret"],
+    ]))).toBe(true);
   });
 
   it("activating a module with a missing channel can patch only that channel", () => {
@@ -306,6 +391,23 @@ describe("patch-based guild config editing", () => {
     expect(manager.get("guild-chepe").communityName).toBe("Multi actual");
   });
 
+  it("legacy conflict requires explicit import to replace multi-guild config", () => {
+    const root = tempRoot();
+    const legacyPath = path.join(root, "config", "server.json");
+    const manager = new GuildConfigManager(path.join(root, "config", "guilds"), legacyPath);
+    const legacy = configFor("guild-chepe");
+    legacy.communityName = "Legacy";
+    const current = configFor("guild-chepe");
+    current.communityName = "Multi";
+    writeServerConfig(legacyPath, legacy);
+    manager.save(current.guildId, current);
+
+    expect(manager.findLegacyConflict()).toBeDefined();
+    expect(manager.get(current.guildId).communityName).toBe("Multi");
+    manager.importLegacyConfig(current.guildId);
+    expect(manager.get(current.guildId).communityName).toBe("Legacy");
+  });
+
   it("modify server edits do not need the full install wizard", () => {
     const session = new GuildConfigEditSession(configFor("guild-chepe"));
 
@@ -357,6 +459,31 @@ describe("patch-based guild config editing", () => {
     await applyConfigEditTransaction({ session, configManager: manager, backup: vi.fn(), guild, applyDiscordStructure: false });
 
     expect((guild.channels as unknown as { create: { mock: { calls: unknown[] } } }).create.mock.calls).toHaveLength(0);
+  });
+
+  it("failure after fileOperations restores previous files and does not save config", async () => {
+    const root = tempRoot();
+    const manager = managerFor(root);
+    const config = configFor("guild-chepe");
+    manager.save(config.guildId, config);
+    const rulesPath = path.join(root, "rules.md");
+    fs.writeFileSync(rulesPath, "before\n", "utf8");
+    const session = new GuildConfigEditSession(manager.get(config.guildId));
+    patchRulesExternalPath(session.getWorking(), rulesPath);
+    session.markChanged("rules");
+
+    await expect(
+      applyConfigEditTransaction({
+        session,
+        configManager: manager,
+        backup: vi.fn(),
+        fileOperations: [{ type: "writeText", path: rulesPath, content: "after\n" }],
+        ensureRulesPanel: () => Promise.reject(new Error("boom")),
+      }),
+    ).rejects.toThrow("boom");
+
+    expect(fs.readFileSync(rulesPath, "utf8")).toBe("before\n");
+    expect(manager.get(config.guildId)).toEqual(config);
   });
 
   it("each operation uses the selected guild id", () => {
@@ -526,4 +653,12 @@ function managerFor(root: string): GuildConfigManager {
 
 function tempRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "config-edit-"));
+}
+
+function validTikTokEnv(): NodeJS.ProcessEnv {
+  return {
+    TIKTOK_CLIENT_KEY: "key",
+    TIKTOK_CLIENT_SECRET: "secret",
+    TIKTOK_TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString("base64"),
+  };
 }
