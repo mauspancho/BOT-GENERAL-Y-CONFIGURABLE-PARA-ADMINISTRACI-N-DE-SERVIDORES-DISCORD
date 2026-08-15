@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { writeTextFileAtomic } from "../../core/config/configStore.js";
 
 export interface EnvFileValues {
   token?: string;
@@ -11,6 +12,7 @@ export interface EnvFileValues {
   tiktokCallbackHost?: string;
   tiktokCallbackPort?: number;
   ensureTikTokEncryptionKey?: boolean;
+  ensureRuntimeDefaults?: boolean;
 }
 
 export function writeEnvFile(values: EnvFileValues, envPath = path.resolve(process.cwd(), ".env")): void {
@@ -19,17 +21,20 @@ export function writeEnvFile(values: EnvFileValues, envPath = path.resolve(proce
 
   setManagedValue(next, "DISCORD_TOKEN", values.token);
   setManagedValue(next, "DISCORD_CLIENT_ID", values.clientId);
-  if (!next.has("NODE_ENV")) {
-    next.set("NODE_ENV", "production");
-  }
-  if (!next.has("CONFIG_PATH")) {
-    next.set("CONFIG_PATH", "./config/server.json");
-  }
-  if (!next.has("DATABASE_PATH")) {
-    next.set("DATABASE_PATH", "./data/bot.sqlite");
-  }
-  if (!next.has("LOG_LEVEL")) {
-    next.set("LOG_LEVEL", "info");
+  const shouldEnsureRuntimeDefaults = values.ensureRuntimeDefaults ?? Boolean(values.token || values.clientId);
+  if (shouldEnsureRuntimeDefaults) {
+    if (!next.has("NODE_ENV")) {
+      next.set("NODE_ENV", "production");
+    }
+    if (!next.has("CONFIG_PATH")) {
+      next.set("CONFIG_PATH", "./config/server.json");
+    }
+    if (!next.has("DATABASE_PATH")) {
+      next.set("DATABASE_PATH", "./data/bot.sqlite");
+    }
+    if (!next.has("LOG_LEVEL")) {
+      next.set("LOG_LEVEL", "info");
+    }
   }
 
   setManagedValue(next, "TIKTOK_CLIENT_KEY", values.tiktokClientKey);
@@ -41,7 +46,7 @@ export function writeEnvFile(values: EnvFileValues, envPath = path.resolve(proce
     next.set("TIKTOK_TOKEN_ENCRYPTION_KEY", crypto.randomBytes(32).toString("base64"));
   }
 
-  fs.writeFileSync(envPath, serializeEnvFile(existing.order, next), "utf8");
+  writeTextFileAtomic(envPath, serializeEnvFile(existing.order, next));
 }
 
 export function readEnvFile(envPath = path.resolve(process.cwd(), ".env")): {

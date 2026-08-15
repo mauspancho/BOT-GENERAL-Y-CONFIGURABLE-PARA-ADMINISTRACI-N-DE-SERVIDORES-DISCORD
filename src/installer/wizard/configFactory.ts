@@ -12,6 +12,7 @@ import { listReusableChannels, listReusableRoles, makeRole } from "../discord/se
 import { buildCustomInstallationStructure } from "./categoryWizard.js";
 import { configureRules } from "./rulesWizard.js";
 import { ensureAutomaticInfrastructure, type StructureConfig } from "./installationPlan.js";
+import type { PlannedFileOperation } from "../configEdit/plannedFileOperations.js";
 import {
   createTheIsleGuideConfig,
   LEGACY_THE_ISLE_GUIDE_SOURCE_PATH,
@@ -21,7 +22,12 @@ import {
 
 type ResourceMode = "create" | "existing" | "disabled";
 
-export async function buildInstallationConfig(guild: Guild, existingConfig?: ServerConfig): Promise<ServerConfig> {
+export interface InstallationConfigResult {
+  config: ServerConfig;
+  fileOperations: PlannedFileOperation[];
+}
+
+export async function buildInstallationConfig(guild: Guild, existingConfig?: ServerConfig): Promise<InstallationConfigResult> {
   const communityName = await input({
     message: "Nombre de la comunidad:",
     default: guild.name,
@@ -66,7 +72,7 @@ export async function buildInstallationConfig(guild: Guild, existingConfig?: Ser
       ? await quickConfig(guild, communityName, modules, theIsleGuide.sourcePath)
       : await buildCustomInstallationStructure(guild, communityName, modules);
 
-  const rulesPath = modules.rules ? await configureRules() : "./data/rules.md";
+  const rulesPlan = modules.rules ? await configureRules(guild.id) : undefined;
   const welcome = {
     channelEnabled: modules.welcome
       ? await confirm({ message: "Enviar bienvenida en canal?", default: true })
@@ -95,17 +101,20 @@ export async function buildInstallationConfig(guild: Guild, existingConfig?: Ser
     : "warn";
 
   return {
+    config: {
     ...base,
     welcome,
     rules: {
       enabled: modules.rules,
-      sourcePath: rulesPath,
+      sourcePath: rulesPlan?.sourcePath ?? `./data/guilds/${guild.id}/rules.md`,
       version: 1,
       requireReacceptOnRulesChange: false,
       rejectAction,
     },
     theIsleGuide,
     tiktokAlerts,
+    },
+    fileOperations: rulesPlan?.fileOperations ?? [],
   };
 }
 

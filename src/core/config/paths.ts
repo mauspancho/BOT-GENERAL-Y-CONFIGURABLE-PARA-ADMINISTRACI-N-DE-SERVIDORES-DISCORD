@@ -22,6 +22,18 @@ export function getRulesPath(relativePath = "./data/rules.md"): string {
   return resolveFromRoot(relativePath);
 }
 
+export function getGuildDataDir(guildId: string): string {
+  return resolveFromRoot(`./data/guilds/${guildId}`);
+}
+
+export function getGuildRulesPath(guildId: string): string {
+  return path.join(getGuildDataDir(guildId), "rules.md");
+}
+
+export function getGuildRulesSourcePath(guildId: string): string {
+  return `./data/guilds/${guildId}/rules.md`;
+}
+
 export function getBackupsDir(): string {
   return resolveFromRoot("./backups");
 }

@@ -22,9 +22,22 @@ export function readServerConfig(configPath: string): ServerConfig {
 export function writeServerConfig(configPath: string, config: ServerConfig): void {
   const parsed = serverConfigSchema.parse(config);
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
+  writeTextFileAtomic(configPath, `${JSON.stringify(parsed, null, 2)}\n`);
 }
 
 export function configExists(configPath: string): boolean {
   return fs.existsSync(configPath);
+}
+
+export function writeTextFileAtomic(targetPath: string, content: string): void {
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  const tempPath = `${targetPath}.tmp-${process.pid}-${Date.now()}`;
+  const handle = fs.openSync(tempPath, "w");
+  try {
+    fs.writeFileSync(handle, content, "utf8");
+    fs.fsyncSync(handle);
+  } finally {
+    fs.closeSync(handle);
+  }
+  fs.renameSync(tempPath, targetPath);
 }

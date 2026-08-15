@@ -1,10 +1,16 @@
-import fs from "node:fs";
 import path from "node:path";
 import { editor, input, select } from "@inquirer/prompts";
 import { projectRoot } from "../../core/config/paths.js";
 import { loadRulesFile, normalizeRules } from "../../services/rulesContentService.js";
+import type { PlannedFileOperation } from "../configEdit/plannedFileOperations.js";
+import { managedRulesAbsolutePath, managedRulesSourcePath } from "../configEdit/rulesStorage.js";
 
-export async function configureRules(): Promise<string> {
+export interface RulesWizardResult {
+  sourcePath: string;
+  fileOperations: PlannedFileOperation[];
+}
+
+export async function configureRules(guildId: string): Promise<RulesWizardResult> {
   const mode = await select({
     message: "Configuracion de reglas",
     choices: [
@@ -15,28 +21,41 @@ export async function configureRules(): Promise<string> {
     ],
   });
 
-  const target = path.join(projectRoot, "data", "rules.md");
-  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const target = managedRulesAbsolutePath(guildId);
 
   if (mode === "import") {
     const source = await input({ message: "Ruta del archivo de reglas:" });
-    const content = loadRulesFile(source);
-    fs.writeFileSync(target, `${content}\n`, "utf8");
-    return "./data/rules.md";
+    loadRulesFile(source);
+    return {
+      sourcePath: managedRulesSourcePath(guildId),
+      fileOperations: [{ type: "copyFile", sourcePath: source, targetPath: target }],
+    };
   }
 
   if (mode === "write") {
     const content = await editor({ message: "Escribe las reglas:" });
-    fs.writeFileSync(target, `${normalizeRules(content)}\n`, "utf8");
-    return "./data/rules.md";
+    return {
+      sourcePath: managedRulesSourcePath(guildId),
+      fileOperations: [{ type: "writeText", path: target, content: `${normalizeRules(content)}\n` }],
+    };
   }
 
   if (mode === "template") {
     const source = path.join(projectRoot, "templates", "default-rules.md");
-    fs.copyFileSync(source, target);
-    return "./data/rules.md";
+    return {
+      sourcePath: managedRulesSourcePath(guildId),
+      fileOperations: [{ type: "copyFile", sourcePath: source, targetPath: target }],
+    };
   }
 
-  fs.writeFileSync(target, "# Reglas\n\nConfigura las reglas con npm run setup.\n", "utf8");
-  return "./data/rules.md";
+  return {
+    sourcePath: managedRulesSourcePath(guildId),
+    fileOperations: [
+      {
+        type: "writeText",
+        path: target,
+        content: "# Reglas\n\nConfigura las reglas con npm run setup.\n",
+      },
+    ],
+  };
 }

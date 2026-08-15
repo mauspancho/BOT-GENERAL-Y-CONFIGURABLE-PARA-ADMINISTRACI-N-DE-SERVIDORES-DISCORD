@@ -28,6 +28,27 @@ export class GuildConfigManager {
     writeServerConfig(targetPath, legacyConfig);
   }
 
+  public findLegacyConflict(): { guildId: string; legacyPath: string; guildPath: string } | undefined {
+    if (!fs.existsSync(this.legacyConfigPath)) {
+      return undefined;
+    }
+
+    const legacyConfig = readServerConfig(this.legacyConfigPath);
+    const guildPath = this.pathFor(legacyConfig.guildId);
+    return fs.existsSync(guildPath)
+      ? { guildId: legacyConfig.guildId, legacyPath: this.legacyConfigPath, guildPath }
+      : undefined;
+  }
+
+  public importLegacyConfig(guildId: string): void {
+    const legacyConfig = readServerConfig(this.legacyConfigPath);
+    if (legacyConfig.guildId !== guildId) {
+      throw new ConfigurationError("La config legacy pertenece a otro guild.");
+    }
+
+    this.save(guildId, legacyConfig);
+  }
+
   public get(guildId: string): ServerConfig {
     const configPath = this.pathFor(guildId);
     if (!fs.existsSync(configPath)) {

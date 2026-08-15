@@ -22,6 +22,29 @@ import { formatInstallationTree } from "../utils/formatPlan.js";
 import { PersistentMessageRepository } from "../repositories/persistentMessageRepository.js";
 import { ensureRulesPanel } from "../services/rulesPanelService.js";
 import { registerGuildCommands } from "../commands/register.js";
+import { GuildConfigEditSession } from "../installer/configEdit/GuildConfigEditSession.js";
+import { formatConfigDiff } from "../installer/configEdit/configDiff.js";
+import {
+  applyConfigEditTransaction,
+  shouldEnsureRulesPanel,
+  shouldRegisterCommands,
+} from "../installer/configEdit/setupTransaction.js";
+import type { PlannedFileOperation } from "../installer/configEdit/plannedFileOperations.js";
+import {
+  patchCommunityName,
+  patchGeneralAlerts,
+  patchManagedRulesContent,
+  patchRulesBehavior,
+  patchRulesExternalPath,
+  patchRulesImport,
+  patchTheIsleGuide,
+  patchTikTokAlerts,
+  patchWelcome,
+  patchCategoryName,
+  patchChannel,
+  ensureLogicalChannel,
+} from "../installer/configEdit/sectionPatches.js";
+import { isManagedRulesPath, readRulesForDisplay } from "../installer/configEdit/rulesStorage.js";
 
 async function main(): Promise<void> {
   const configManager = new GuildConfigManager();
@@ -37,8 +60,9 @@ async function main(): Promise<void> {
       choices: [
         { name: "Agregar/configurar servidor Discord", value: "install" },
         { name: "Modificar servidor existente", value: "modify" },
+        { name: "Configurar integracion TikTok Developer", value: "tiktok-developer" },
         { name: "Crear o modificar estructura Discord", value: "structure" },
-        { name: "Validar servidor", value: "validate" },
+        { name: "Validar servidores", value: "validate" },
         { name: "Mostrar servidores configurados", value: "show" },
         { name: "Crear backup", value: "backup" },
         { name: "Restaurar backup", value: "restore" },
@@ -50,7 +74,10 @@ async function main(): Promise<void> {
       await runInstall(configManager, "add");
     }
     if (option === "modify") {
-      await runInstall(configManager, "modify");
+      await runModifyServer(configManager);
+    }
+    if (option === "tiktok-developer") {
+      await configureTikTokDeveloperGlobal();
     }
     if (option === "structure") {
       await runStructureOnly(configManager);
@@ -104,15 +131,15 @@ async function runInstall(configManager: GuildConfigManager, mode: "add" | "modi
   await guild.roles.fetch();
 
   const existingConfig = configManager.find(guildId);
-  const config = await buildConfigUntilApproved(guild, existingConfig);
-  if (!config) {
+  const result = await buildConfigUntilApproved(guild, existingConfig);
+  if (!result) {
     await client.destroy();
     return;
   }
-  await configureTikTokEnv(config.modules.tiktokAlerts);
-
-  if (existingConfig) {
-    createBackup("pre-setup-change");
+  const { config, fileOperations } = result;
+  const pendingFileOperations = [...fileOperations];
+  if (config.modules.tiktokAlerts) {
+    pendingFileOperations.push(...(await collectTikTokDeveloperFileOperations()));
   }
 
   const missing = await validateBotPermissions(guild, config);
@@ -125,6 +152,9 @@ async function runInstall(configManager: GuildConfigManager, mode: "add" | "modi
     return;
   }
 
+  createBackup("pre-setup-change");
+  const { applyPlannedFileOperations } = await import("../installer/configEdit/plannedFileOperations.js");
+  applyPlannedFileOperations(pendingFileOperations);
   const changes = await applyStructurePlanSafely(guild, config);
   if (!changes) {
     await client.destroy();
@@ -144,47 +174,52 @@ async function runInstall(configManager: GuildConfigManager, mode: "add" | "modi
   console.log(`\nConfiguracion guardada en ${configManager.pathFor(config.guildId)}.`);
 }
 
-async function configureTikTokEnv(enabled: boolean): Promise<void> {
-  if (!enabled) {
+async function configureTikTokDeveloperGlobal(): Promise<void> {
+  const fileOperations = await collectTikTokDeveloperFileOperations();
+  if (fileOperations.length === 0) {
+    console.log("No hay cambios para aplicar.");
     return;
   }
 
+  const shouldApply = await confirm({ message: "Aplicar cambios de TikTok Developer?", default: false });
+  if (!shouldApply) {
+    console.log("Cancelado. No se aplico ningun cambio.");
+    return;
+  }
+
+  createBackup("pre-tiktok-developer-change");
+  const { applyPlannedFileOperations } = await import("../installer/configEdit/plannedFileOperations.js");
+  applyPlannedFileOperations(fileOperations);
+  console.log("Integracion TikTok Developer actualizada.");
+}
+
+async function collectTikTokDeveloperFileOperations(): Promise<PlannedFileOperation[]> {
   const current = readEnvFile().values;
-  const hasClientKey = Boolean(current.get("TIKTOK_CLIENT_KEY"));
-  const hasClientSecret = Boolean(current.get("TIKTOK_CLIENT_SECRET"));
-  console.log("\nConfiguracion TikTok:");
-  console.log(`Client Key: ${hasClientKey ? "configurado" : "no configurado"}`);
-  console.log(`Client Secret: ${hasClientSecret ? "configurado" : "no configurado"}`);
-  console.log(`Redirect URI: ${current.get("TIKTOK_REDIRECT_URI") ?? "https://tiktok.linuxred.lat/tiktok/callback"}`);
-  console.log(`Callback: ${current.get("TIKTOK_CALLBACK_HOST") ?? "127.0.0.1"}:${current.get("TIKTOK_CALLBACK_PORT") ?? "8787"}`);
+  printTikTokDeveloperStatus(current);
+  const values: Record<string, string> = {};
 
-  const credentialAction =
-    hasClientKey && hasClientSecret
-      ? await select<"keep" | "modify">({
-          message: "Credenciales TikTok:",
-          choices: [
-            { name: "Mantener credenciales existentes", value: "keep" },
-            { name: "Modificar credenciales", value: "modify" },
-          ],
-        })
-      : "modify";
+  const action = await select<"keep" | "modify">({
+    message: "Credenciales TikTok Developer:",
+    choices: [
+      { name: "Mantener credenciales existentes", value: "keep" },
+      { name: "Modificar credenciales", value: "modify" },
+    ],
+  });
 
-  const tiktokClientKey =
-    credentialAction === "modify"
-      ? await input({
-          message: "TikTok Client Key:",
-          validate: (value) => value.trim().length > 0 || "TikTok Client Key es obligatorio.",
-        })
-      : undefined;
-  const tiktokClientSecret =
-    credentialAction === "modify"
-      ? await password({
-          message: "TikTok Client Secret:",
-          mask: "*",
-          validate: (value) => value.trim().length > 0 || "TikTok Client Secret es obligatorio.",
-        })
-      : undefined;
-  const tiktokRedirectUri = await input({
+  if (action === "modify") {
+    values.TIKTOK_CLIENT_KEY = await input({
+      message: "TikTok Client Key:",
+      default: current.get("TIKTOK_CLIENT_KEY"),
+      validate: (value) => value.trim().length > 0 || "TikTok Client Key es obligatorio.",
+    });
+    values.TIKTOK_CLIENT_SECRET = await password({
+      message: "TikTok Client Secret:",
+      mask: "*",
+      validate: (value) => value.trim().length > 0 || "TikTok Client Secret es obligatorio.",
+    });
+  }
+
+  values.TIKTOK_REDIRECT_URI = await input({
     message: "TikTok Redirect URI:",
     default: current.get("TIKTOK_REDIRECT_URI") ?? "https://tiktok.linuxred.lat/tiktok/callback",
     validate(value) {
@@ -196,32 +231,30 @@ async function configureTikTokEnv(enabled: boolean): Promise<void> {
       }
     },
   });
-  const tiktokCallbackHost = await input({
+  values.TIKTOK_CALLBACK_HOST = await input({
     message: "TikTok Callback host:",
     default: current.get("TIKTOK_CALLBACK_HOST") ?? "127.0.0.1",
     validate: (value) => value.trim().length > 0 || "Callback host es obligatorio.",
   });
-  const tiktokCallbackPort = Number(
-    await input({
-      message: "TikTok Callback port:",
-      default: current.get("TIKTOK_CALLBACK_PORT") ?? "8787",
-      validate(value) {
-        const parsed = Number(value);
-        return Number.isInteger(parsed) && parsed > 0 && parsed <= 65_535
-          ? true
-          : "Puerto invalido.";
-      },
-    }),
-  );
-
-  writeEnvFile({
-    ...(tiktokClientKey ? { tiktokClientKey } : {}),
-    ...(tiktokClientSecret ? { tiktokClientSecret } : {}),
-    tiktokRedirectUri,
-    tiktokCallbackHost,
-    tiktokCallbackPort,
-    ensureTikTokEncryptionKey: true,
+  values.TIKTOK_CALLBACK_PORT = await input({
+    message: "TikTok Callback port:",
+    default: current.get("TIKTOK_CALLBACK_PORT") ?? "8787",
+    validate(value) {
+      const parsed = Number(value);
+      return Number.isInteger(parsed) && parsed > 0 && parsed <= 65_535 ? true : "Puerto invalido.";
+    },
   });
+
+  return [{ type: "patchEnv", envPath: ".env", values, ensureTikTokEncryptionKey: true }];
+}
+
+function printTikTokDeveloperStatus(current: Map<string, string>): void {
+  console.log("\nTikTok Developer");
+  console.log(`Client Key: ${current.has("TIKTOK_CLIENT_KEY") ? "configurado" : "no configurado"}`);
+  console.log(`Client Secret: ${current.has("TIKTOK_CLIENT_SECRET") ? "configurado" : "no configurado"}`);
+  console.log(`Redirect URI: ${current.get("TIKTOK_REDIRECT_URI") ?? "https://tiktok.linuxred.lat/tiktok/callback"}`);
+  console.log(`Callback: ${current.get("TIKTOK_CALLBACK_HOST") ?? "127.0.0.1"}:${current.get("TIKTOK_CALLBACK_PORT") ?? "8787"}`);
+  console.log(`Encryption Key: ${current.has("TIKTOK_TOKEN_ENCRYPTION_KEY") ? "configurada" : "no configurada"}\n`);
 }
 
 async function runStructureOnly(configManager: GuildConfigManager): Promise<void> {
@@ -262,6 +295,399 @@ async function runStructureOnly(configManager: GuildConfigManager): Promise<void
   console.log(`Cambios procesados: ${changes.length}`);
 }
 
+async function runModifyServer(configManager: GuildConfigManager): Promise<void> {
+  const guildId = await selectConfiguredGuild(configManager);
+  const originalConfig = configManager.get(guildId);
+  const session = new GuildConfigEditSession(originalConfig);
+  const fileOperations: PlannedFileOperation[] = [];
+  let applyDiscordStructure = false;
+  let done = false;
+
+  while (!done) {
+    const action = await select({
+      message: `Modificar servidor: ${session.getWorking().communityName}`,
+      choices: [
+        { name: "Modulos", value: "modules" },
+        { name: "Alertas al canal general", value: "general-alerts" },
+        { name: "TikTok Alerts", value: "tiktok-alerts" },
+        { name: "Reglas", value: "rules" },
+        { name: "Bienvenida", value: "welcome" },
+        { name: "The Isle Guide", value: "the-isle" },
+        { name: "Estructura Discord", value: "structure" },
+        { name: "Nombre de comunidad", value: "community-name" },
+        { name: "Mostrar configuracion", value: "show" },
+        { name: "Aplicar cambios", value: "apply" },
+        { name: "Volver", value: "back" },
+      ],
+    });
+
+    if (action === "modules") {
+      applyDiscordStructure = (await editModules(session)) || applyDiscordStructure;
+    }
+    if (action === "general-alerts") {
+      await editGeneralAlerts(session);
+    }
+    if (action === "tiktok-alerts") {
+      const tiktokFileOps = await editTikTokAlerts(session);
+      fileOperations.push(...tiktokFileOps);
+    }
+    if (action === "rules") {
+      fileOperations.push(...(await editRules(session)));
+    }
+    if (action === "welcome") {
+      await editWelcome(session);
+    }
+    if (action === "the-isle") {
+      await editTheIsleGuide(session);
+    }
+    if (action === "structure") {
+      await editStructure(session);
+      applyDiscordStructure = true;
+    }
+    if (action === "community-name") {
+      await editCommunityName(session);
+    }
+    if (action === "show") {
+      console.log(JSON.stringify(session.getWorking(), null, 2));
+    }
+    if (action === "apply") {
+      await applyModifySession(configManager, session, fileOperations, applyDiscordStructure);
+      done = true;
+    }
+    if (action === "back") {
+      session.discard();
+      console.log("Cancelado. No se aplico ningun cambio.");
+      done = true;
+    }
+  }
+}
+
+async function editModules(session: GuildConfigEditSession): Promise<boolean> {
+  const config = session.getWorking();
+  const selectedModules = await import("@inquirer/prompts").then(({ checkbox }) =>
+    checkbox({
+      message: "Modulos activos:",
+      choices: [
+        { name: "Bienvenida", value: "welcome", checked: config.modules.welcome },
+        { name: "Reglas", value: "rules", checked: config.modules.rules },
+        { name: "Logs", value: "logs", checked: config.modules.logs },
+        { name: "Alertas al canal general", value: "generalAlerts", checked: config.modules.generalAlerts },
+        { name: "Alertas automaticas de TikTok", value: "tiktokAlerts", checked: config.modules.tiktokAlerts },
+        { name: "Self-roles", value: "selfRoles", checked: config.modules.selfRoles },
+        { name: "Anuncios", value: "announcements", checked: config.modules.announcements },
+        { name: "Tickets", value: "tickets", checked: config.modules.tickets },
+        { name: "Sugerencias", value: "suggestions", checked: config.modules.suggestions },
+        { name: "Moderacion", value: "moderation", checked: config.modules.moderation },
+        { name: "The Isle Evrima Guide", value: "theIsleGuide", checked: config.modules.theIsleGuide },
+      ],
+    }),
+  );
+  const selected = new Set<string>(selectedModules);
+  for (const key of Object.keys(config.modules) as Array<keyof typeof config.modules>) {
+    config.modules[key] = selected.has(key);
+  }
+  config.rules.enabled = config.modules.rules;
+  config.tiktokAlerts.enabled = config.modules.tiktokAlerts;
+  config.theIsleGuide.enabled = config.modules.theIsleGuide;
+  session.markChanged("modules");
+  return false;
+}
+
+async function editGeneralAlerts(session: GuildConfigEditSession): Promise<void> {
+  const enabled = await confirm({ message: "Activar alertas al canal general?", default: session.getWorking().modules.generalAlerts });
+  patchGeneralAlerts(session.getWorking(), enabled);
+  session.markChanged("generalAlerts");
+}
+
+async function editTikTokAlerts(session: GuildConfigEditSession): Promise<PlannedFileOperation[]> {
+  const config = session.getWorking();
+  const currentEnv = readEnvFile().values;
+  console.log("\nTikTok Alerts");
+  console.log(`Estado del modulo: ${config.modules.tiktokAlerts ? "activo" : "inactivo"}`);
+  console.log("Cuenta conectada: consultar con /tiktok estado");
+  console.log(`Polling: ${config.tiktokAlerts.pollingIntervalSeconds}`);
+  console.log(`Mencion: ${config.tiktokAlerts.mention}`);
+  printTikTokDeveloperStatus(currentEnv);
+
+  const action = await select<"enable" | "disable" | "polling" | "mention" | "status" | "back">({
+    message: "TikTok Alerts:",
+    choices: [
+      { name: "Activar modulo", value: "enable" },
+      { name: "Desactivar modulo", value: "disable" },
+      { name: "Cambiar polling", value: "polling" },
+      { name: "Cambiar mencion", value: "mention" },
+      { name: "Mostrar estado", value: "status" },
+      { name: "Volver", value: "back" },
+    ],
+  });
+
+  if (action === "back" || action === "status") {
+    return [];
+  }
+
+  const fileOperations: PlannedFileOperation[] = [];
+  if (action === "enable") {
+    const hasDeveloperCredentials = currentEnv.has("TIKTOK_CLIENT_KEY") && currentEnv.has("TIKTOK_CLIENT_SECRET");
+    if (!hasDeveloperCredentials) {
+      console.log("El modulo TikTok Alerts esta habilitado para este servidor, pero la integracion TikTok Developer todavia no esta configurada.");
+      const credentialAction = await select<"configure" | "disabled" | "cancel">({
+        message: "Que desea hacer?",
+        choices: [
+          { name: "Configurar TikTok Developer ahora", value: "configure" },
+          { name: "Mantener modulo desactivado", value: "disabled" },
+          { name: "Cancelar", value: "cancel" },
+        ],
+      });
+      if (credentialAction === "cancel" || credentialAction === "disabled") {
+        return [];
+      }
+      fileOperations.push(...(await collectTikTokDeveloperFileOperations()));
+    }
+    patchTikTokAlerts(config, { enabled: true });
+  }
+  if (action === "disable") {
+    patchTikTokAlerts(config, { enabled: false });
+  }
+  if (action === "polling") {
+    const pollingIntervalSeconds = Number(
+      await input({
+        message: "Intervalo de comprobacion TikTok (segundos):",
+        default: String(config.tiktokAlerts.pollingIntervalSeconds),
+        validate(value) {
+          const parsed = Number(value);
+          return Number.isInteger(parsed) && parsed >= 60 ? true : "Use un entero de al menos 60 segundos.";
+        },
+      }),
+    );
+    patchTikTokAlerts(config, { pollingIntervalSeconds });
+  }
+  if (action === "mention") {
+    const mention = await select<ServerConfig["tiktokAlerts"]["mention"]>({
+      message: "Mencion por defecto TikTok:",
+      choices: [
+        { name: "ninguna", value: "ninguna" },
+        { name: "everyone", value: "everyone" },
+        { name: "here", value: "here" },
+      ],
+      default: config.tiktokAlerts.mention,
+    });
+    patchTikTokAlerts(config, { mention });
+  }
+  session.markChanged("tiktokAlerts");
+  return fileOperations;
+}
+
+async function editRules(session: GuildConfigEditSession): Promise<PlannedFileOperation[]> {
+  const config = session.getWorking();
+  console.log("\nReglas actuales");
+  console.log(`Estado: ${config.rules.enabled ? "activo" : "inactivo"}`);
+  console.log(`Ruta: ${config.rules.sourcePath}`);
+  console.log(`Version: ${config.rules.version}`);
+  console.log(`Reaceptacion: ${config.rules.requireReacceptOnRulesChange}`);
+  console.log(`Accion al rechazar: ${config.rules.rejectAction}`);
+
+  const action = await select<"keep" | "external" | "import" | "edit" | "reject" | "reaccept" | "disable" | "back">({
+    message: "Reglas:",
+    choices: [
+      { name: "Mantener sin cambios", value: "keep" },
+      { name: "Usar archivo externo", value: "external" },
+      { name: "Importar archivo al almacenamiento del guild", value: "import" },
+      { name: "Editar reglas administradas", value: "edit" },
+      { name: "Cambiar comportamiento de rechazo", value: "reject" },
+      { name: "Cambiar reaceptacion", value: "reaccept" },
+      { name: "Desactivar reglas", value: "disable" },
+      { name: "Volver", value: "back" },
+    ],
+  });
+
+  if (action === "keep" || action === "back") {
+    return [];
+  }
+  if (action === "external") {
+    const sourcePath = await input({ message: "Ruta del archivo externo de reglas:" });
+    patchRulesExternalPath(config, sourcePath);
+    session.markChanged("rules");
+    return [];
+  }
+  if (action === "import") {
+    const sourcePath = await input({ message: "Ruta del archivo a importar:" });
+    const result = patchRulesImport(config, sourcePath);
+    session.markChanged("rules");
+    return result.fileOperations;
+  }
+  if (action === "edit") {
+    if (!isManagedRulesPath(config.guildId, config.rules.sourcePath)) {
+      console.log("La ruta actual es externa. No se editara silenciosamente; importela primero al almacenamiento del guild.");
+      return [];
+    }
+    const currentContent = readRulesForDisplay(config.rules.sourcePath) ?? "# Reglas\n";
+    const content = await import("@inquirer/prompts").then(({ editor }) =>
+      editor({ message: "Editar reglas administradas:", default: currentContent }),
+    );
+    const result = patchManagedRulesContent(config, content);
+    session.markChanged("rules");
+    return result.fileOperations;
+  }
+  if (action === "reject") {
+    const rejectAction = await select<ServerConfig["rules"]["rejectAction"]>({
+      message: "Que ocurre si un usuario rechaza las reglas?",
+      choices: [
+        { name: "Mostrar advertencia", value: "warn" },
+        { name: "No realizar ninguna accion", value: "none" },
+        { name: "Expulsar del servidor", value: "kick" },
+        { name: "Mantener rol pendiente", value: "keep_pending" },
+      ],
+    });
+    patchRulesBehavior(config, { rejectAction });
+  }
+  if (action === "reaccept") {
+    const requireReacceptOnRulesChange = await confirm({
+      message: "Requerir reaceptacion cuando cambien las reglas?",
+      default: config.rules.requireReacceptOnRulesChange,
+    });
+    patchRulesBehavior(config, { requireReacceptOnRulesChange });
+  }
+  if (action === "disable") {
+    patchRulesBehavior(config, { enabled: false });
+  }
+  session.markChanged("rules");
+  return [];
+}
+
+async function editWelcome(session: GuildConfigEditSession): Promise<void> {
+  const config = session.getWorking();
+  const channelEnabled = await confirm({ message: "Enviar bienvenida en canal?", default: config.welcome.channelEnabled });
+  const dmEnabled = await confirm({ message: "Enviar bienvenida por DM?", default: config.welcome.dmEnabled });
+  const message = await input({ message: "Mensaje de bienvenida:", default: config.welcome.message });
+  patchWelcome(config, { channelEnabled, dmEnabled, message });
+  session.markChanged("welcome");
+}
+
+async function editTheIsleGuide(session: GuildConfigEditSession): Promise<void> {
+  const config = session.getWorking();
+  const action = await select<"disable" | "path" | "back">({
+    message: "The Isle Guide:",
+    choices: [
+      { name: "Desactivar modulo", value: "disable" },
+      { name: "Cambiar ruta", value: "path" },
+      { name: "Volver", value: "back" },
+    ],
+  });
+  if (action === "back") {
+    return;
+  }
+  if (action === "disable") {
+    patchTheIsleGuide(config, { enabled: false });
+  }
+  if (action === "path") {
+    const sourcePath = await input({ message: "Ruta del archivo The Isle:", default: config.theIsleGuide.sourcePath });
+    patchTheIsleGuide(config, { enabled: true, sourcePath });
+  }
+  session.markChanged("theIsleGuide");
+}
+
+async function editStructure(session: GuildConfigEditSession): Promise<void> {
+  const config = session.getWorking();
+  console.log(formatInstallationTree(config));
+  const action = await select<"category" | "channel" | "add-channel" | "back">({
+    message: "Estructura Discord:",
+    choices: [
+      { name: "Modificar categoria", value: "category" },
+      { name: "Modificar canal", value: "channel" },
+      { name: "Agregar canal logico", value: "add-channel" },
+      { name: "Volver", value: "back" },
+    ],
+  });
+  if (action === "back") {
+    return;
+  }
+  if (action === "category") {
+    const key = await select({
+      message: "Categoria:",
+      choices: Object.entries(config.categories).map(([key, category]) => ({ name: `${key}: ${category.name}`, value: key })),
+    });
+    const name = await input({ message: "Nombre:", default: config.categories[key]?.name });
+    patchCategoryName(config, key, name);
+  }
+  if (action === "channel") {
+    const key = await select({
+      message: "Canal:",
+      choices: Object.entries(config.channels).map(([key, channel]) => ({ name: `${key}: ${channel.name} (${channel.id ?? "sin id"})`, value: key })),
+    });
+    const current = config.channels[key]!;
+    const name = await input({ message: "Nombre:", default: current.name });
+    patchChannel(config, key, { name });
+  }
+  if (action === "add-channel") {
+    const key = await input({ message: "Clave logica del canal:" });
+    const name = await input({ message: "Nombre del canal:" });
+    ensureLogicalChannel(config, key, { name, function: "custom" });
+  }
+  session.markChanged("structure");
+}
+
+async function editCommunityName(session: GuildConfigEditSession): Promise<void> {
+  const communityName = await input({ message: "Nombre de la comunidad:", default: session.getWorking().communityName });
+  patchCommunityName(session.getWorking(), communityName);
+  session.markChanged("communityName");
+}
+
+async function applyModifySession(
+  configManager: GuildConfigManager,
+  session: GuildConfigEditSession,
+  fileOperations: PlannedFileOperation[],
+  applyDiscordStructure: boolean,
+): Promise<void> {
+  if (!session.hasChanges() && fileOperations.length === 0) {
+    console.log("No hay cambios para aplicar.");
+    return;
+  }
+
+  console.log("\nCAMBIOS PROPUESTOS\n");
+  console.log(formatConfigDiff(session.getOriginal(), session.getWorking()));
+  const shouldApply = await confirm({ message: "Aplicar estos cambios?", default: false });
+  if (!shouldApply) {
+    session.discard();
+    console.log("Cancelado. No se aplico ningun cambio.");
+    return;
+  }
+
+  const needsDiscord = applyDiscordStructure || shouldRegisterCommands(session.getOriginal(), session.getWorking()) || shouldEnsureRulesPanel(session.getOriginal(), session.getWorking(), session.sections());
+  const env = needsDiscord ? loadEnv() : undefined;
+  const client = needsDiscord ? createDiscordClient() : undefined;
+  const guild = client ? await loginAndFetchGuild(client, env!.DISCORD_TOKEN, session.guildId) : undefined;
+  const database = needsDiscord ? await openDatabase(getDatabasePath()) : undefined;
+
+  const result = await applyConfigEditTransaction({
+    session,
+    configManager,
+    backup: () => createBackup("pre-config-edit"),
+    fileOperations,
+    applyDiscordStructure,
+    auditPath: "logs/setup-audit.jsonl",
+    ...(guild ? { guild } : {}),
+    ...(env ? { registerCommands: (config: ServerConfig) => registerGuildCommands(env.DISCORD_TOKEN, env.DISCORD_CLIENT_ID, config) } : {}),
+    ...(client && database
+      ? { ensureRulesPanel: (config: ServerConfig) => ensureRulesPanel(client, config, new PersistentMessageRepository(database)) }
+      : {}),
+  });
+
+  database?.close();
+  await client?.destroy();
+  console.log(result.applied ? "Cambios aplicados." : "No hay cambios para aplicar.");
+}
+
+async function loginAndFetchGuild(client: ReturnType<typeof createDiscordClient>, token: string, guildId: string) {
+  await client.login(token);
+  if (!client.isReady()) {
+    await once(client, Events.ClientReady);
+  }
+  const guild = await client.guilds.fetch(guildId);
+  await guild.channels.fetch();
+  await guild.roles.fetch();
+  return guild;
+}
+
 async function selectConfiguredGuild(configManager: GuildConfigManager): Promise<string> {
   const configs = configManager.list();
   if (configs.length === 0) {
@@ -293,8 +719,8 @@ async function buildConfigUntilApproved(
   let retry = true;
 
   while (retry) {
-    const config = await buildInstallationConfig(guild, existingConfig);
-    const preflight = preflightStructurePlan(guild, config);
+    const result = await buildInstallationConfig(guild, existingConfig);
+    const preflight = preflightStructurePlan(guild, result.config);
     printPreflight(preflight);
     if (!preflight.ok) {
       const action = await select<"modify" | "cancel">({
@@ -311,7 +737,7 @@ async function buildConfigUntilApproved(
     }
 
     console.log("\nSe aplicara la siguiente estructura:\n");
-    console.log(formatInstallationTree(config));
+    console.log(formatInstallationTree(result.config));
 
     const action = await select<"apply" | "modify" | "cancel">({
       message: "Aplicar esta configuracion?",
@@ -323,7 +749,7 @@ async function buildConfigUntilApproved(
     });
 
     if (action === "apply") {
-      return config;
+      return result;
     }
 
     if (action === "cancel") {
