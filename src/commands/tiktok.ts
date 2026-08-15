@@ -161,6 +161,7 @@ export const tiktokCommand: SlashCommand = {
         const session = createTikTokRepublishSession({
           guildId: context.config.guildId,
           discordUserId: interaction.user.id,
+          openId: connection.openId,
           displayName: connection.displayName,
           page,
         });

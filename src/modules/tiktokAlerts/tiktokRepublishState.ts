@@ -11,6 +11,7 @@ export interface TikTokRepublishSession {
   id: string;
   guildId: string;
   discordUserId: string;
+  openId: string;
   displayName: string;
   pages: TikTokRepublishPage[];
   currentPageIndex: number;
@@ -23,6 +24,7 @@ const sessions = new Map<string, TikTokRepublishSession>();
 export function createTikTokRepublishSession(values: {
   guildId: string;
   discordUserId: string;
+  openId?: string | undefined;
   displayName?: string | undefined;
   videos?: TikTokVideo[] | undefined;
   page?: TikTokVideoPage | undefined;
@@ -34,6 +36,7 @@ export function createTikTokRepublishSession(values: {
     id,
     guildId: values.guildId,
     discordUserId: values.discordUserId,
+    openId: values.openId ?? "open-id",
     displayName: values.displayName ?? "TikTok",
     pages: [toRepublishPage(values.page ?? { videos: values.videos ?? [], hasMore: false })],
     currentPageIndex: 0,
@@ -61,6 +64,10 @@ export function getCurrentTikTokRepublishPage(session: TikTokRepublishSession): 
 
 export function getCurrentTikTokRepublishVideoIds(session: TikTokRepublishSession): string[] {
   return getCurrentTikTokRepublishPage(session).videos.map((video) => video.id);
+}
+
+export function findCurrentTikTokRepublishVideo(session: TikTokRepublishSession, videoId: string): TikTokVideo | undefined {
+  return getCurrentTikTokRepublishPage(session).videos.find((video) => video.id === videoId);
 }
 
 export function appendTikTokRepublishPage(session: TikTokRepublishSession, page: TikTokVideoPage): TikTokRepublishPage {

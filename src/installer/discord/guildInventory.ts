@@ -164,9 +164,11 @@ export function findCategoryCandidates(
   key: string,
   category: { name: string; id?: string | undefined },
 ): ResourceMatch<InventoryCategory> {
-  const normalizedAliases = new Set([key, category.name, ...(categoryAliases[key] ?? [])].map(normalizeDiscordResourceName));
-  const matches = inventory.categories.filter((candidate) => normalizedAliases.has(candidate.normalizedName));
-  return classifyMatches(matches);
+  return findCandidatesByPriority(inventory.categories, [
+    [category.name],
+    [key],
+    categoryAliases[key] ?? [],
+  ]);
 }
 
 export function findRoleCandidates(
@@ -174,9 +176,11 @@ export function findRoleCandidates(
   key: string,
   role: RoleConfig,
 ): ResourceMatch<InventoryRole> {
-  const normalizedAliases = new Set([key, role.name, ...(roleAliases[key] ?? [])].map(normalizeDiscordResourceName));
-  const matches = inventory.roles.filter((candidate) => normalizedAliases.has(candidate.normalizedName));
-  return classifyMatches(matches);
+  return findCandidatesByPriority(inventory.roles, [
+    [role.name],
+    [key],
+    roleAliases[key] ?? [],
+  ]);
 }
 
 export function applyInventoryToConfig(
@@ -277,6 +281,17 @@ function classifyMatches<T>(matches: T[]): ResourceMatch<T> {
     return { status: "matched", candidates: matches };
   }
   return { status: "ambiguous", candidates: matches };
+}
+
+function findCandidatesByPriority<T extends { normalizedName: string }>(candidates: T[], levels: string[][]): ResourceMatch<T> {
+  for (const level of levels) {
+    const normalized = new Set(level.map(normalizeDiscordResourceName));
+    const matches = candidates.filter((candidate) => normalized.has(candidate.normalizedName));
+    if (matches.length > 0) {
+      return classifyMatches(matches);
+    }
+  }
+  return { status: "none", candidates: [] };
 }
 
 export function isCompatibleInventoryChannel(candidate: InventoryChannel, channel: ChannelConfig): boolean {

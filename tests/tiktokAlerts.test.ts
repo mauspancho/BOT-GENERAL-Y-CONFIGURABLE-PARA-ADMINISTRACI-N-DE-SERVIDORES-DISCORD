@@ -757,6 +757,52 @@ describe("tiktok alerts", () => {
     database.close();
   });
 
+  it("/tiktok republicar can publish a selected video from page 2 without revalidating page 1", async () => {
+    const database = await openMemoryDatabase();
+    const repository = await connectedRepository(database);
+    keepConnectionFresh(repository);
+    repository.updatePollingState("guild", { lastCheckAt: "before", lastSuccessAt: "before", lastVideoId: "before-video" });
+    stubTikTokEnv();
+    const config = makeConfig(true);
+    const commandInteraction = makeInteraction("republicar", { isAdministrator: true });
+    vi.spyOn(TikTokApiClient.prototype, "listVideosPage").mockResolvedValueOnce({
+      videos: [video("video-page-1", 3_000)],
+      cursor: 100,
+      hasMore: true,
+    });
+
+    await tiktokCommand.execute(commandInteraction as never, { config, database });
+
+    const sessionId = extractRepublishSessionId(firstReply(commandInteraction).components, TIKTOK_REPUBLISH_NEXT_PREFIX);
+    const api = makeApi({ pages: [{ videos: [video("video-page-2", 3_100, "Video pagina dos")], hasMore: false }] });
+    const nextInteraction = makeRepublishButtonInteraction(`${TIKTOK_REPUBLISH_NEXT_PREFIX}${sessionId}`, {
+      userId: "admin",
+      guildId: "guild",
+      isAdministrator: true,
+    });
+
+    await handleTikTokButton(nextInteraction as never, config, database, { runtime: runtime(), api });
+
+    const selectInteraction = makeSelectInteraction(
+      extractCustomId(firstUpdate(nextInteraction).components, TIKTOK_REPUBLISH_SELECT_PREFIX),
+      "video-page-2",
+      { userId: "admin", guildId: "guild", isAdministrator: true },
+    );
+
+    await handleTikTokRepublishSelect(selectInteraction as never, config, database);
+
+    expect(selectInteraction.client.generalSend).toHaveBeenCalled();
+    expect(JSON.stringify(firstAlertPayload(selectInteraction.client))).toContain("video-page-2");
+    expect(selectInteraction.reply).not.toHaveBeenCalled();
+    expect((api.listVideos as unknown as { mock: { calls: unknown[] } }).mock.calls).toHaveLength(0);
+    expect(repository.hasPublishedVideo("guild", "open-id", "video-page-2")).toBe(false);
+    const after = repository.findConnection("guild");
+    expect(after?.lastVideoId).toBe("before-video");
+    expect(after?.lastCheckAt).toBe("before");
+    expect(after?.lastSuccessAt).toBe("before");
+    database.close();
+  });
+
   it("/tiktok republicar pagination cannot be used from another guild", async () => {
     const database = await openMemoryDatabase();
     const config = makeConfig(true);
@@ -778,6 +824,78 @@ describe("tiktok alerts", () => {
     });
 
     expect(firstButtonReply(interaction).content).toContain("otro servidor");
+    database.close();
+  });
+
+  it("/tiktok republicar rejects next page when the connected account changed", async () => {
+    const database = await openMemoryDatabase();
+    const repository = await connectedRepository(database);
+    keepConnectionFresh(repository);
+    const config = makeConfig(true);
+    const session = createTikTokRepublishSession({
+      guildId: "guild",
+      discordUserId: "admin",
+      openId: "open-id",
+      page: { videos: [video("page-1", 3_000)], hasMore: true, cursor: 50 },
+    });
+    changeConnectionOpenId(repository, "open-id-b");
+    const api = makeApi({ pages: [{ videos: [video("page-2", 3_100)], hasMore: false }] });
+    const interaction = makeRepublishButtonInteraction(`${TIKTOK_REPUBLISH_NEXT_PREFIX}${session.id}`, {
+      userId: "admin",
+      guildId: "guild",
+      isAdministrator: true,
+    });
+
+    await handleTikTokButton(interaction as never, config, database, { runtime: runtime(), api });
+
+    expect(firstButtonReply(interaction).content).toContain("cuenta TikTok conectada cambio");
+    expect((api.listVideosPage as unknown as { mock: { calls: unknown[] } }).mock.calls).toHaveLength(0);
+    database.close();
+  });
+
+  it("/tiktok republicar rejects selected video when the connected account changed", async () => {
+    const database = await openMemoryDatabase();
+    const repository = await connectedRepository(database);
+    const config = makeConfig(true);
+    const customId = createRepublishCustomId("guild", "admin", [video("old", 3_000)], "open-id");
+    changeConnectionOpenId(repository, "open-id-b");
+    const selectInteraction = makeSelectInteraction(customId, "old", {
+      userId: "admin",
+      guildId: "guild",
+      isAdministrator: true,
+    });
+
+    await handleTikTokRepublishSelect(selectInteraction as never, config, database);
+
+    expect(firstButtonReply(selectInteraction).content).toContain("cuenta TikTok conectada cambio");
+    expect(selectInteraction.client.generalSend).not.toHaveBeenCalled();
+    database.close();
+  });
+
+  it("/tiktok republicar rejects hasMore without cursor without duplicating pages", async () => {
+    const database = await openMemoryDatabase();
+    await connectedRepository(database);
+    const config = makeConfig(true);
+    const session = createTikTokRepublishSession({
+      guildId: "guild",
+      discordUserId: "admin",
+      openId: "open-id",
+      page: { videos: [video("page-1", 3_000)], hasMore: true },
+    });
+    const api = makeApi({ pages: [{ videos: [video("page-2", 3_100)], hasMore: false }] });
+    const logger = { error: vi.fn() };
+    const interaction = makeRepublishButtonInteraction(`${TIKTOK_REPUBLISH_NEXT_PREFIX}${session.id}`, {
+      userId: "admin",
+      guildId: "guild",
+      isAdministrator: true,
+    });
+
+    await handleTikTokButton(interaction as never, config, database, { runtime: runtime(), api, logger: logger as never });
+
+    expect(firstButtonReply(interaction).content).toContain("cursor valido");
+    expect((api.listVideosPage as unknown as { mock: { calls: unknown[] } }).mock.calls).toHaveLength(0);
+    expect(session.pages).toHaveLength(1);
+    expect(logger.error).toHaveBeenCalled();
     database.close();
   });
 
@@ -889,21 +1007,18 @@ describe("tiktok alerts", () => {
     database.close();
   });
 
-  it("republish TikTok API error replies ephemeral without exposing secrets", async () => {
+  it("republish rejects a video id outside the current saved page without exposing secrets", async () => {
     const database = await openMemoryDatabase();
     await connectedRepository(database);
     const config = makeConfig(true);
-    const selectInteraction = makeSelectInteraction(createRepublishCustomId("guild", "admin", [video("old", 3_000)]), "old", {
+    const selectInteraction = makeSelectInteraction(createRepublishCustomId("guild", "admin", [video("allowed", 3_000)]), "old", {
       userId: "admin",
       guildId: "guild",
       isAdministrator: true,
     });
 
-    await handleTikTokRepublishSelect(selectInteraction as never, config, database, {
-      runtime: runtime(),
-      api: makeApi({ videos: [] }),
-    });
-    expect(firstButtonReply(selectInteraction).content).toContain("ya no esta disponible");
+    await handleTikTokRepublishSelect(selectInteraction as never, config, database);
+    expect(firstButtonReply(selectInteraction).content).toContain("no pertenece");
     expect(JSON.stringify(selectInteraction.update.mock.calls)).not.toMatch(/access|refresh|secret/i);
     database.close();
   });
@@ -1056,6 +1171,18 @@ function keepConnectionFresh(repository: TikTokRepository, guildId = "guild"): v
   });
 }
 
+function changeConnectionOpenId(repository: TikTokRepository, openId: string, guildId = "guild"): void {
+  const connection = repository.findConnection(guildId);
+  if (!connection) {
+    throw new Error(`Missing TikTok connection for ${guildId}.`);
+  }
+  repository.upsertConnection({
+    ...connection,
+    openId,
+    displayName: `Cuenta ${openId}`,
+  });
+}
+
 function stubTikTokEnv(): void {
   const config = runtime();
   vi.stubEnv("TIKTOK_CLIENT_KEY", config.clientKey);
@@ -1066,8 +1193,8 @@ function stubTikTokEnv(): void {
   vi.stubEnv("TIKTOK_TOKEN_ENCRYPTION_KEY", config.encryptionKey.toString("base64"));
 }
 
-function createRepublishCustomId(guildId: string, discordUserId: string, videos: TikTokVideo[]): string {
-  const session = createTikTokRepublishSession({ guildId, discordUserId, videos });
+function createRepublishCustomId(guildId: string, discordUserId: string, videos: TikTokVideo[], openId = "open-id"): string {
+  const session = createTikTokRepublishSession({ guildId, discordUserId, openId, videos });
   return `${TIKTOK_REPUBLISH_SELECT_PREFIX}${session.id}`;
 }
 
@@ -1283,6 +1410,25 @@ function makeRepublishButtonInteraction(
     reply,
     update,
   };
+}
+
+function extractRepublishSessionId(components: unknown[] | undefined, prefix: string): string {
+  const customId = extractCustomId(components, prefix);
+  return customId.slice(prefix.length);
+}
+
+function extractCustomId(components: unknown[] | undefined, prefix: string): string {
+  const json = JSON.stringify(components);
+  const pattern = new RegExp(`${escapeRegExp(prefix)}[A-Za-z0-9_-]+`);
+  const match = json.match(pattern);
+  if (!match) {
+    throw new Error(`No custom id with prefix ${prefix}.`);
+  }
+  return match[0];
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function makeInteraction(subcommand: string, options: {

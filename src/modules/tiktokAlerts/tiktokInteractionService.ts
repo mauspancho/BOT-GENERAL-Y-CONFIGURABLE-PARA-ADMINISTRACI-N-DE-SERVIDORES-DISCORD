@@ -5,6 +5,7 @@ import type { GuildConfigManager } from "../../core/config/guildConfigManager.js
 import type { AppLogger } from "../../core/logger/logger.js";
 import { requireAdministrator, requireGuildAdministratorForUser } from "../../core/permissions/guards.js";
 import { TikTokRepository } from "../../repositories/tiktokRepository.js";
+import type { TikTokConnection } from "./tiktokTypes.js";
 import {
   TIKTOK_CONNECT_CANCEL_PREFIX,
   TIKTOK_CONNECT_CONFIRM_PREFIX,
@@ -27,6 +28,7 @@ import type { TikTokRuntimeConfig } from "./tiktokTypes.js";
 import {
   appendTikTokRepublishPage,
   deleteTikTokRepublishSession,
+  findCurrentTikTokRepublishVideo,
   getCurrentTikTokRepublishPage,
   getCurrentTikTokRepublishVideoIds,
   getTikTokRepublishSession,
@@ -175,18 +177,23 @@ export async function handleTikTokRepublishSelect(
     return true;
   }
 
+  const repository = new TikTokRepository(database);
+  const connection = requireCurrentConnectionForRepublishSession(repository, config.guildId, session.openId);
+  if (!connection) {
+    await interaction.reply({ content: "La cuenta TikTok conectada cambio. Ejecuta /tiktok republicar nuevamente.", ephemeral: true });
+    return true;
+  }
+
   const [videoId] = interaction.values;
-  if (!videoId || !getCurrentTikTokRepublishVideoIds(session).includes(videoId)) {
+  const selectedVideo = videoId ? findCurrentTikTokRepublishVideo(session, videoId) : undefined;
+  if (!selectedVideo || !getCurrentTikTokRepublishVideoIds(session).includes(selectedVideo.id)) {
     await interaction.reply({ content: "El video seleccionado no pertenece a esta sesion.", ephemeral: true });
     return true;
   }
 
-  const repository = new TikTokRepository(database);
-  const runtime = dependencies?.runtime ?? loadTikTokRuntimeConfig();
-  const api = dependencies?.api ?? new TikTokApiClient(runtime);
   let video;
   try {
-    video = await republishTikTokVideo(interaction.client, config, repository, api, runtime, videoId);
+    video = await republishTikTokVideo(interaction.client, config, connection, selectedVideo);
   } catch (error) {
     dependencies?.logger?.error(
       {
@@ -233,16 +240,20 @@ async function handleTikTokRepublishPaginationButton(
   }
 
   try {
+    const repository = new TikTokRepository(database);
+    const connection = requireCurrentConnectionForRepublishSession(repository, config.guildId, session.openId);
+    if (!connection) {
+      await interaction.reply({ content: "La cuenta TikTok conectada cambio. Ejecuta /tiktok republicar nuevamente.", ephemeral: true });
+      return true;
+    }
     let page = getCurrentTikTokRepublishPage(session);
     if (direction === "previous") {
       page = moveTikTokRepublishPage(session, "previous");
     } else if (session.currentPageIndex < session.pages.length - 1) {
       page = moveTikTokRepublishPage(session, "next");
     } else if (page.hasMore) {
-      const repository = new TikTokRepository(database);
-      const connection = repository.findConnection(config.guildId);
-      if (!connection) {
-        throw new Error("No hay una cuenta TikTok conectada.");
+      if (page.cursor === undefined) {
+        throw new Error("TikTok indico mas resultados pero no devolvio un cursor valido.");
       }
       const runtime = dependencies?.runtime ?? loadTikTokRuntimeConfig();
       const api = dependencies?.api ?? new TikTokApiClient(runtime);
@@ -266,7 +277,7 @@ async function handleTikTokRepublishPaginationButton(
       },
       "TikTok manual republish pagination failed",
     );
-    await interaction.reply({ content: "No se pudo cargar esa pagina de videos TikTok.", ephemeral: true });
+    await interaction.reply({ content: safeRepublishPaginationErrorMessage(error), ephemeral: true });
   }
   return true;
 }
@@ -276,6 +287,25 @@ function safeRepublishErrorMessage(error: unknown): string {
     return error.message;
   }
   return "No se pudo republicar el video TikTok en este momento.";
+}
+
+function safeRepublishPaginationErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message === "TikTok indico mas resultados pero no devolvio un cursor valido.") {
+    return error.message;
+  }
+  return "No se pudo cargar esa pagina de videos TikTok.";
+}
+
+function requireCurrentConnectionForRepublishSession(
+  repository: TikTokRepository,
+  guildId: string,
+  expectedOpenId: string,
+): TikTokConnection | undefined {
+  const connection = repository.findConnection(guildId);
+  if (!connection || connection.openId !== expectedOpenId) {
+    return undefined;
+  }
+  return connection;
 }
 
 function sanitizeTikTokRepublishError(error: unknown): { name?: string; message: string; stack?: string | undefined } {

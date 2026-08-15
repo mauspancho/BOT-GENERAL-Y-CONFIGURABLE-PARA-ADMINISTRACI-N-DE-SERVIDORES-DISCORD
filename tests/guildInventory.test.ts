@@ -128,6 +128,18 @@ describe("guild inventory reuse", () => {
     expect(config.categories.information?.id).toBe("info-id");
   });
 
+  it("exact category name wins over category alias", () => {
+    const config = configFor("guild");
+    const guild = makeGuildMock({
+      features: [],
+      channels: [category("alias-id", "info"), category("exact-id", "INFORMACION")],
+    });
+
+    applyInventoryToConfig(config, scanGuildInventory(guild));
+
+    expect(config.categories.information?.id).toBe("exact-id");
+  });
+
   it("reuses existing protected roles by normalized aliases", async () => {
     const config = configFor("guild");
     const guild = makeGuildMock({
@@ -144,11 +156,23 @@ describe("guild inventory reuse", () => {
     expect(createdRoleNames(guild)).not.toContain("Miembro");
   });
 
+  it("exact role name wins over role alias", () => {
+    const config = configFor("guild");
+    const guild = makeGuildMock({
+      features: [],
+      roles: [role("alias-id", "verified"), role("exact-id", "Miembro")],
+    });
+
+    applyInventoryToConfig(config, scanGuildInventory(guild));
+
+    expect(config.roles.member?.id).toBe("exact-id");
+  });
+
   it("does not choose arbitrary role when role matches are ambiguous", () => {
     const config = configFor("guild");
     const guild = makeGuildMock({
       features: [],
-      roles: [role("member-1", "Miembro"), role("member-2", "member")],
+      roles: [role("member-1", "member"), role("member-2", "👤 member")],
     });
 
     const result = applyInventoryToConfig(config, scanGuildInventory(guild));

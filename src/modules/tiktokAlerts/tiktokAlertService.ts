@@ -239,23 +239,10 @@ export async function sendTikTokTestAlert(
 export async function republishTikTokVideo(
   client: Client,
   config: ServerConfig,
-  repository: TikTokRepository,
-  api: TikTokApiClient,
-  runtime: TikTokRuntimeConfig,
-  videoId: string,
+  connection: TikTokConnection,
+  video: TikTokVideo,
 ): Promise<TikTokVideo> {
-  const connection = repository.findConnection(config.guildId);
-  if (!connection) {
-    throw new Error("No hay una cuenta TikTok conectada.");
-  }
-  const refreshed = await refreshTikTokConnectionIfNeeded(repository, api, runtime, connection);
-  const videos = await api.listVideos(refreshed.accessToken, 20);
-  const video = videos.find((candidate) => candidate.id === videoId);
-  if (!video) {
-    throw new Error("El video seleccionado ya no esta disponible para esta cuenta TikTok.");
-  }
-
-  await publishTikTokVideo(client, config, refreshed.connection, video, {
+  await publishTikTokVideo(client, config, connection, video, {
     mention: config.tiktokAlerts.mention,
     manualRepublish: true,
   });
