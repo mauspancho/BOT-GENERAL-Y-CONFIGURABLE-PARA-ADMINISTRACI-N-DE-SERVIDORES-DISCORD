@@ -236,6 +236,32 @@ export async function sendTikTokTestAlert(
   return video;
 }
 
+export async function republishTikTokVideo(
+  client: Client,
+  config: ServerConfig,
+  repository: TikTokRepository,
+  api: TikTokApiClient,
+  runtime: TikTokRuntimeConfig,
+  videoId: string,
+): Promise<TikTokVideo> {
+  const connection = repository.findConnection(config.guildId);
+  if (!connection) {
+    throw new Error("No hay una cuenta TikTok conectada.");
+  }
+  const refreshed = await refreshTikTokConnectionIfNeeded(repository, api, runtime, connection);
+  const videos = await api.listVideos(refreshed.accessToken, 20);
+  const video = videos.find((candidate) => candidate.id === videoId);
+  if (!video) {
+    throw new Error("El video seleccionado ya no esta disponible para esta cuenta TikTok.");
+  }
+
+  await publishTikTokVideo(client, config, refreshed.connection, video, {
+    mention: config.tiktokAlerts.mention,
+    manualRepublish: true,
+  });
+  return video;
+}
+
 export async function disconnectTikTok(
   repository: TikTokRepository,
   api: TikTokApiClient,
@@ -349,7 +375,7 @@ async function publishTikTokVideo(
   const description = video.videoDescription ?? video.title ?? "Nuevo video publicado.";
   await sendGeneralAlert(client, config, {
     type: "informacion",
-    title: options.manualTest ? "TikTok prueba manual" : "Nuevo video en TikTok",
+    title: options.manualRepublish ? "TikTok republicado" : options.manualTest ? "TikTok prueba manual" : "Nuevo video en TikTok",
     message: [
       `${connection.displayName} acaba de publicar un nuevo video.`,
       "",

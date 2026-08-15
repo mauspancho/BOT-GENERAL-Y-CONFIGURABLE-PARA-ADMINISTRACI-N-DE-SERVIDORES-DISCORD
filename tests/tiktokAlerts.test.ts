@@ -22,9 +22,18 @@ import {
 } from "../src/modules/tiktokAlerts/tiktokAlertService.js";
 import { TikTokApiClient } from "../src/modules/tiktokAlerts/tiktokApiClient.js";
 import { TikTokCallbackServer } from "../src/modules/tiktokAlerts/tiktokCallbackServer.js";
-import { TIKTOK_CONNECT_CANCEL_PREFIX, TIKTOK_CONNECT_CONFIRM_PREFIX } from "../src/modules/tiktokAlerts/tiktokCustomIds.js";
+import {
+  TIKTOK_CONNECT_CANCEL_PREFIX,
+  TIKTOK_CONNECT_CONFIRM_PREFIX,
+  TIKTOK_REPUBLISH_SELECT_PREFIX,
+} from "../src/modules/tiktokAlerts/tiktokCustomIds.js";
 import { decryptTikTokToken } from "../src/modules/tiktokAlerts/tiktokCrypto.js";
-import { handleTikTokPendingDmButton, isTikTokPendingButton } from "../src/modules/tiktokAlerts/tiktokInteractionService.js";
+import {
+  handleTikTokPendingDmButton,
+  handleTikTokRepublishSelect,
+  isTikTokPendingButton,
+} from "../src/modules/tiktokAlerts/tiktokInteractionService.js";
+import { createTikTokRepublishSession } from "../src/modules/tiktokAlerts/tiktokRepublishState.js";
 import type { TikTokRuntimeConfig, TikTokTokenResponse, TikTokUserInfo, TikTokVideo } from "../src/modules/tiktokAlerts/tiktokTypes.js";
 import { TikTokRepository } from "../src/repositories/tiktokRepository.js";
 import { makeGuildMock } from "./support/discordMocks.js";
@@ -79,6 +88,16 @@ describe("tiktok alerts", () => {
 
     expect(firstReply(interaction).content).toContain("TikTok Alerts");
     expect(firstReply(interaction).content).not.toContain("token");
+    database.close();
+  });
+
+  it("/tiktok republicar requires Administrator", async () => {
+    const database = await openMemoryDatabase();
+    const interaction = makeInteraction("republicar", { isAdministrator: false });
+
+    await tiktokCommand.execute(interaction as never, { config: makeConfig(true), database });
+
+    expect(firstReply(interaction).content).toContain("Administrador");
     database.close();
   });
 
@@ -647,6 +666,173 @@ describe("tiktok alerts", () => {
     database.close();
   });
 
+  it("/tiktok republicar fails clearly without connected account", async () => {
+    const database = await openMemoryDatabase();
+    stubTikTokEnv();
+    const interaction = makeInteraction("republicar", { isAdministrator: true });
+
+    await tiktokCommand.execute(interaction as never, { config: makeConfig(true), database });
+
+    expect(firstReply(interaction).content).toContain("No hay una cuenta TikTok conectada");
+    database.close();
+  });
+
+  it("/tiktok republicar fetches TikTok videos and returns ephemeral select menu", async () => {
+    const database = await openMemoryDatabase();
+    const repository = await connectedRepository(database);
+    keepConnectionFresh(repository);
+    stubTikTokEnv();
+    vi.spyOn(TikTokApiClient.prototype, "listVideos").mockResolvedValueOnce([video("old", 3_000)]);
+    const interaction = makeInteraction("republicar", { isAdministrator: true });
+
+    await tiktokCommand.execute(interaction as never, { config: makeConfig(true), database });
+
+    const reply = firstReply(interaction);
+    expect(reply.ephemeral).toBe(true);
+    expect(reply.components?.[0]).toBeDefined();
+    database.close();
+  });
+
+  it("/tiktok republicar limits menu options to 20 videos", async () => {
+    const database = await openMemoryDatabase();
+    const repository = await connectedRepository(database);
+    keepConnectionFresh(repository);
+    stubTikTokEnv();
+    const interaction = makeInteraction("republicar", { isAdministrator: true });
+    const apiVideos = Array.from({ length: 30 }, (_, index) => video(`video-${index}`, 3_000 + index));
+    vi.spyOn(TikTokApiClient.prototype, "listVideos").mockResolvedValueOnce(apiVideos);
+
+    await tiktokCommand.execute(interaction as never, { config: makeConfig(true), database });
+
+    expect(repository.findConnection("guild")).toBeDefined();
+    expect(JSON.stringify(firstReply(interaction).components)).not.toContain("video-25");
+    database.close();
+  });
+
+  it("selecting a republish video posts to configured general channel with mention and keeps dedupe state", async () => {
+    const database = await openMemoryDatabase();
+    const repository = await connectedRepository(database);
+    repository.markVideoPublished("guild", "open-id", "already", 2_500);
+    repository.updatePollingState("guild", { lastCheckAt: "before", lastSuccessAt: "before", lastVideoId: "already" });
+    const config = makeConfig(true, "here");
+    const api = makeApi({ videos: [video("already", 3_000, "Republicar descripcion")] });
+    const customId = createRepublishCustomId("guild", "admin", [video("already", 3_000, "Republicar descripcion")]);
+    const selectInteraction = makeSelectInteraction(customId, "already", { userId: "admin", guildId: "guild", isAdministrator: true });
+
+    await handleTikTokRepublishSelect(selectInteraction as never, config, database, {
+      runtime: runtime(),
+      api,
+    });
+
+    expect(selectInteraction.client.generalSend).toHaveBeenCalled();
+    expect(firstAlertPayload(selectInteraction.client).content).toBe("@here");
+    expect(JSON.stringify(firstAlertPayload(selectInteraction.client))).toContain("Republicar descripcion");
+    expect(repository.hasPublishedVideo("guild", "open-id", "already")).toBe(true);
+    const afterRepublish = repository.findConnection("guild");
+    expect(afterRepublish?.lastVideoId).toBe("already");
+    expect(afterRepublish?.lastCheckAt).toBe("before");
+    expect(afterRepublish?.lastSuccessAt).toBe("before");
+    const automatic = await checkTikTokVideos(makeClient() as never, config, repository, api, runtime(), { mention: "ninguna" });
+    expect(automatic).toBe(0);
+    database.close();
+  });
+
+  it("another user cannot use a republish select menu", async () => {
+    const database = await openMemoryDatabase();
+    const config = makeConfig(true);
+    const selectInteraction = makeSelectInteraction(createRepublishCustomId("guild", "admin", [video("old", 3_000)]), "old", {
+      userId: "other",
+      guildId: "guild",
+      isAdministrator: true,
+    });
+
+    await handleTikTokRepublishSelect(selectInteraction as never, config, database, {
+      runtime: runtime(),
+      api: makeApi({ videos: [video("old", 3_000)] }),
+    });
+
+    expect(firstButtonReply(selectInteraction).content).toContain("otro servidor o administrador");
+    expect(selectInteraction.client.generalSend).not.toHaveBeenCalled();
+    database.close();
+  });
+
+  it("admin who lost permissions cannot use republish select menu", async () => {
+    const database = await openMemoryDatabase();
+    const config = makeConfig(true);
+    const selectInteraction = makeSelectInteraction(createRepublishCustomId("guild", "admin", [video("old", 3_000)]), "old", {
+      userId: "admin",
+      guildId: "guild",
+      isAdministrator: false,
+    });
+
+    await handleTikTokRepublishSelect(selectInteraction as never, config, database, {
+      runtime: runtime(),
+      api: makeApi({ videos: [video("old", 3_000)] }),
+    });
+
+    expect(firstButtonReply(selectInteraction).content).toContain("Administrador");
+    expect(selectInteraction.client.generalSend).not.toHaveBeenCalled();
+    database.close();
+  });
+
+  it("guild A cannot use republish select from guild B", async () => {
+    const database = await openMemoryDatabase();
+    const otherConfig = makeConfig(true);
+    otherConfig.guildId = "other-guild";
+    const selectInteraction = makeSelectInteraction(createRepublishCustomId("guild", "admin", [video("old", 3_000)]), "old", {
+      userId: "admin",
+      guildId: "other-guild",
+      isAdministrator: true,
+    });
+
+    await handleTikTokRepublishSelect(selectInteraction as never, otherConfig, database, {
+      runtime: runtime(),
+      api: makeApi({ videos: [video("old", 3_000)] }),
+    });
+
+    expect(firstButtonReply(selectInteraction).content).toContain("otro servidor");
+    expect(selectInteraction.client.generalSend).not.toHaveBeenCalled();
+    database.close();
+  });
+
+  it("expired republish select reports clear error and does not publish", async () => {
+    const database = await openMemoryDatabase();
+    const config = makeConfig(true);
+    const selectInteraction = makeSelectInteraction("tiktok:republish:select:expired", "old", {
+      userId: "admin",
+      guildId: "guild",
+      isAdministrator: true,
+    });
+
+    await handleTikTokRepublishSelect(selectInteraction as never, config, database, {
+      runtime: runtime(),
+      api: makeApi({ videos: [video("old", 3_000)] }),
+    });
+
+    expect(firstButtonReply(selectInteraction).content).toContain("expiro");
+    expect(selectInteraction.client.generalSend).not.toHaveBeenCalled();
+    database.close();
+  });
+
+  it("republish TikTok API error replies ephemeral without exposing secrets", async () => {
+    const database = await openMemoryDatabase();
+    await connectedRepository(database);
+    const config = makeConfig(true);
+    const selectInteraction = makeSelectInteraction(createRepublishCustomId("guild", "admin", [video("old", 3_000)]), "old", {
+      userId: "admin",
+      guildId: "guild",
+      isAdministrator: true,
+    });
+
+    await handleTikTokRepublishSelect(selectInteraction as never, config, database, {
+      runtime: runtime(),
+      api: makeApi({ videos: [] }),
+    });
+    expect(firstButtonReply(selectInteraction).content).toContain("ya no esta disponible");
+    expect(JSON.stringify(selectInteraction.update.mock.calls)).not.toMatch(/access|refresh|secret/i);
+    database.close();
+  });
+
   it("preflight rejects tiktokAlerts without generalAlerts", () => {
     const config = makeConfig(true);
     config.modules.generalAlerts = false;
@@ -754,6 +940,33 @@ async function connectedRepository(database: Awaited<ReturnType<typeof openMemor
     now: new Date(2_000_000),
   });
   return repository;
+}
+
+function keepConnectionFresh(repository: TikTokRepository, guildId = "guild"): void {
+  const connection = repository.findConnection(guildId);
+  if (!connection) {
+    throw new Error(`Missing TikTok connection for ${guildId}.`);
+  }
+  repository.upsertConnection({
+    ...connection,
+    accessTokenExpiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+    refreshTokenExpiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+  });
+}
+
+function stubTikTokEnv(): void {
+  const config = runtime();
+  vi.stubEnv("TIKTOK_CLIENT_KEY", config.clientKey);
+  vi.stubEnv("TIKTOK_CLIENT_SECRET", config.clientSecret);
+  vi.stubEnv("TIKTOK_REDIRECT_URI", config.redirectUri);
+  vi.stubEnv("TIKTOK_CALLBACK_HOST", config.callbackHost);
+  vi.stubEnv("TIKTOK_CALLBACK_PORT", "8787");
+  vi.stubEnv("TIKTOK_TOKEN_ENCRYPTION_KEY", config.encryptionKey.toString("base64"));
+}
+
+function createRepublishCustomId(guildId: string, discordUserId: string, videos: TikTokVideo[]): string {
+  const session = createTikTokRepublishSession({ guildId, discordUserId, videos });
+  return `${TIKTOK_REPUBLISH_SELECT_PREFIX}${session.id}`;
 }
 
 function makeConfig(enabled: boolean, mention: ServerConfig["tiktokAlerts"]["mention"] = "ninguna"): ServerConfig {
@@ -926,7 +1139,9 @@ function makeButtonInteraction(customId: string, options: { userId: string; guil
   };
 }
 
-function firstButtonReply(interaction: ReturnType<typeof makeButtonInteraction>): { content: string; ephemeral: boolean } {
+function firstButtonReply(interaction: {
+  reply: { mock: { calls: Array<Array<{ content: string; ephemeral: boolean }>> } };
+}): { content: string; ephemeral: boolean } {
   const payload = interaction.reply.mock.calls[0]?.[0];
   if (!payload) {
     throw new Error("No button reply.");
@@ -946,7 +1161,7 @@ function makeInteraction(subcommand: string, options: {
   isAdministrator?: boolean;
   hasPermission?: (permission: bigint) => boolean;
 }) {
-  const reply = vi.fn((payload: { content: string; ephemeral: boolean }) => {
+  const reply = vi.fn((payload: { content: string; ephemeral: boolean; components?: unknown[] }) => {
     void payload;
     return Promise.resolve();
   });
@@ -966,10 +1181,34 @@ function makeInteraction(subcommand: string, options: {
   };
 }
 
-function firstReply(interaction: ReturnType<typeof makeInteraction>): { content: string; ephemeral: boolean } {
+function firstReply(interaction: ReturnType<typeof makeInteraction>): { content: string; ephemeral: boolean; components?: unknown[] } {
   const payload = interaction.reply.mock.calls[0]?.[0];
   if (!payload) {
     throw new Error("No reply payload.");
   }
   return payload;
+}
+
+function makeSelectInteraction(customId: string, videoId: string, options: { userId: string; guildId: string; isAdministrator: boolean }) {
+  const client = makeClient();
+  const reply = vi.fn((payload: { content: string; ephemeral: boolean }) => {
+    void payload;
+    return Promise.resolve();
+  });
+  const update = vi.fn((payload: { content: string; components: unknown[] }) => {
+    void payload;
+    return Promise.resolve();
+  });
+  return {
+    customId,
+    values: [videoId],
+    guildId: options.guildId,
+    user: { id: options.userId },
+    client,
+    memberPermissions: {
+      has: (permission: bigint) => options.isAdministrator && permission === PermissionFlagsBits.Administrator,
+    },
+    reply,
+    update,
+  };
 }

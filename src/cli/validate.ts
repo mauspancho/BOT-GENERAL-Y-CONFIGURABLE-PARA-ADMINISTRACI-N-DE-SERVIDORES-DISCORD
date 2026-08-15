@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { pathToFileURL } from "node:url";
-import { Events } from "discord.js";
+import { ChannelType, Events, type Guild, type GuildBasedChannel } from "discord.js";
 import { z } from "zod";
 import { envSchema } from "../core/config/env.js";
 import { GuildConfigManager } from "../core/config/guildConfigManager.js";
@@ -8,7 +8,11 @@ import { getDatabasePath } from "../core/config/paths.js";
 import type { ServerConfig } from "../core/config/schema.js";
 import { openDatabase } from "../core/database/sqlite.js";
 import { createDiscordClient } from "../core/discord/client.js";
-import { validateBotPermissions } from "../installer/discord/setupDiscord.js";
+import {
+  guildSupportsAnnouncementChannels,
+  toDiscordChannelType,
+  validateBotPermissions,
+} from "../installer/discord/setupDiscord.js";
 import { loadRulesFile } from "../services/rulesContentService.js";
 import {
   isTheIsleGuideEnabled,
@@ -142,20 +146,22 @@ export async function runValidation(): Promise<Check[]> {
 
         for (const [key, category] of Object.entries(config.categories)) {
           const exists = category.id ? await guild.channels.fetch(category.id).catch(() => null) : null;
+          const isCategory = Boolean(exists && !exists.isThread() && exists.type === ChannelType.GuildCategory);
           checks.push({
             name: `Category ${config.guildId}/${key}`,
-            ok: Boolean(exists),
-            message: exists ? undefined : `Categoria ${category.id ?? category.name} no existe.`,
+            ok: isCategory,
+            message: isCategory ? undefined : `Categoria ${category.id ?? category.name} no existe o no es una categoria.`,
             action: "Run: npm run setup",
           });
         }
 
         for (const [key, channel] of Object.entries(config.channels)) {
           const exists = channel.id ? await guild.channels.fetch(channel.id).catch(() => null) : null;
+          const validType = channelMatchesConfigType(guild, exists, channel.type);
           checks.push({
             name: `Channel ${config.guildId}/${key}`,
-            ok: Boolean(exists),
-            message: exists ? undefined : `Canal ${channel.id ?? channel.name} no existe.`,
+            ok: validType,
+            message: validType ? undefined : `Canal ${channel.id ?? channel.name} no existe o no es de tipo ${channel.type}.`,
             action: "Run: npm run setup",
           });
         }
@@ -201,6 +207,17 @@ export async function runValidation(): Promise<Check[]> {
 
   console.log(checks.every((check) => check.ok) ? "\nValidation successful." : "\nValidation failed.");
   return checks;
+}
+
+function channelMatchesConfigType(
+  guild: Guild,
+  channel: GuildBasedChannel | null,
+  expectedType: ServerConfig["channels"][string]["type"],
+): boolean {
+  if (!channel || channel.isThread()) {
+    return false;
+  }
+  return channel.type === toDiscordChannelType(expectedType, guildSupportsAnnouncementChannels(guild));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

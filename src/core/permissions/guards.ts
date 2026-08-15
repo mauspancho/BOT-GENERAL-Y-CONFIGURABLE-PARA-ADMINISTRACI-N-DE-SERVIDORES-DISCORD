@@ -1,6 +1,14 @@
-import { PermissionFlagsBits, type ButtonInteraction, type ChatInputCommandInteraction, type Client } from "discord.js";
+import {
+  PermissionFlagsBits,
+  type ButtonInteraction,
+  type ChatInputCommandInteraction,
+  type Client,
+  type StringSelectMenuInteraction,
+} from "discord.js";
 
-export async function requireAdministrator(interaction: ChatInputCommandInteraction | ButtonInteraction): Promise<boolean> {
+export async function requireAdministrator(
+  interaction: ChatInputCommandInteraction | ButtonInteraction | StringSelectMenuInteraction,
+): Promise<boolean> {
   const memberPermissions = interaction.memberPermissions;
   if (!memberPermissions?.has(PermissionFlagsBits.Administrator)) {
     await interaction.reply({

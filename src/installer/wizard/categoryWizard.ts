@@ -5,6 +5,7 @@ import { askChannelForCategory } from "./channelWizard.js";
 import { formatInstallationTree } from "../../utils/formatPlan.js";
 import { ensureAutomaticInfrastructure, ensureVerificationRoles } from "./installationPlan.js";
 import type { ServerConfig } from "../../core/config/schema.js";
+import { applyInventoryToConfig, scanGuildInventory } from "../discord/guildInventory.js";
 
 type CategoryAction = "create" | "existing" | "finish";
 
@@ -55,6 +56,7 @@ export async function buildCustomInstallationStructure(
     memberRole: await maybeAskRoleName(modules.rules, "Rol miembro:", "Miembro"),
   });
   ensureAutomaticInfrastructure(config);
+  applyInventoryToConfig(config, scanGuildInventory(guild));
 
   return config;
 }

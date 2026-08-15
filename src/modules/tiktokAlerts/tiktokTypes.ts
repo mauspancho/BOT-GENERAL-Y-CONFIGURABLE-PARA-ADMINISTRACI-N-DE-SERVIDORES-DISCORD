@@ -78,4 +78,5 @@ export interface TikTokVideo {
 export interface TikTokAlertOptions {
   mention: GeneralAlertMention;
   manualTest?: boolean;
+  manualRepublish?: boolean;
 }

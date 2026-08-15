@@ -1,4 +1,4 @@
-import type { ButtonInteraction } from "discord.js";
+import type { ButtonInteraction, StringSelectMenuInteraction } from "discord.js";
 import type { ServerConfig } from "../../core/config/schema.js";
 import type { Database } from "../../core/database/sqlite.js";
 import type { GuildConfigManager } from "../../core/config/guildConfigManager.js";
@@ -9,15 +9,18 @@ import {
   TIKTOK_CONNECT_CONFIRM_PREFIX,
   TIKTOK_DISCONNECT_CANCEL_PREFIX,
   TIKTOK_DISCONNECT_CONFIRM_PREFIX,
+  TIKTOK_REPUBLISH_SELECT_PREFIX,
 } from "./tiktokCustomIds.js";
 import { TikTokApiClient } from "./tiktokApiClient.js";
 import {
   cancelTikTokPendingConnection,
   confirmTikTokPendingConnection,
   disconnectTikTok,
+  republishTikTokVideo,
 } from "./tiktokAlertService.js";
 import { loadTikTokRuntimeConfig } from "./tiktokEnv.js";
 import type { TikTokRuntimeConfig } from "./tiktokTypes.js";
+import { deleteTikTokRepublishSession, getTikTokRepublishSession } from "./tiktokRepublishState.js";
 
 export function isTikTokPendingButton(customId: string): boolean {
   return customId.startsWith(TIKTOK_CONNECT_CONFIRM_PREFIX) || customId.startsWith(TIKTOK_CONNECT_CANCEL_PREFIX);
@@ -122,6 +125,65 @@ export async function handleTikTokButton(
   await disconnectTikTok(repository, api, runtime, config.guildId);
   await interaction.update({ content: "TikTok desconectado correctamente.", components: [] });
   return true;
+}
+
+export async function handleTikTokRepublishSelect(
+  interaction: StringSelectMenuInteraction,
+  config: ServerConfig,
+  database: Database,
+  dependencies?: { runtime?: TikTokRuntimeConfig; api?: TikTokApiClient },
+): Promise<boolean> {
+  if (!interaction.customId.startsWith(TIKTOK_REPUBLISH_SELECT_PREFIX)) {
+    return false;
+  }
+  if (!config.modules.tiktokAlerts) {
+    await interaction.reply({ content: "TikTok Alerts ya no esta habilitado.", ephemeral: true });
+    return true;
+  }
+  if (!(await requireAdministrator(interaction))) {
+    return true;
+  }
+
+  const sessionId = interaction.customId.slice(TIKTOK_REPUBLISH_SELECT_PREFIX.length);
+  const session = getTikTokRepublishSession(sessionId);
+  if (!session) {
+    await interaction.reply({ content: "La seleccion de republicacion expiro. Ejecuta /tiktok republicar otra vez.", ephemeral: true });
+    return true;
+  }
+  if (session.guildId !== config.guildId || session.discordUserId !== interaction.user.id) {
+    await interaction.reply({ content: "Esta seleccion pertenece a otro servidor o administrador.", ephemeral: true });
+    return true;
+  }
+
+  const [videoId] = interaction.values;
+  if (!videoId || !session.videoIds.includes(videoId)) {
+    await interaction.reply({ content: "El video seleccionado no pertenece a esta sesion.", ephemeral: true });
+    return true;
+  }
+
+  const repository = new TikTokRepository(database);
+  const runtime = dependencies?.runtime ?? loadTikTokRuntimeConfig();
+  const api = dependencies?.api ?? new TikTokApiClient(runtime);
+  let video;
+  try {
+    video = await republishTikTokVideo(interaction.client, config, repository, api, runtime, videoId);
+  } catch (error) {
+    await interaction.reply({ content: safeRepublishErrorMessage(error), ephemeral: true });
+    return true;
+  }
+  deleteTikTokRepublishSession(sessionId);
+  await interaction.update({
+    content: `Video republicado correctamente en #${config.channels.general?.name ?? "general"}: ${video.id}`,
+    components: [],
+  });
+  return true;
+}
+
+function safeRepublishErrorMessage(error: unknown): string {
+  if (error instanceof Error && /No hay una cuenta|ya no esta disponible/.test(error.message)) {
+    return error.message;
+  }
+  return "No se pudo republicar el video TikTok en este momento.";
 }
 
 function pendingStateFromCustomId(customId: string): string {

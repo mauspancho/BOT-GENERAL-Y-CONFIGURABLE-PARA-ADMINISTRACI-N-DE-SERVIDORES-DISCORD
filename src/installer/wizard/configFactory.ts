@@ -9,6 +9,7 @@ import {
   type ServerConfig,
 } from "../../core/config/schema.js";
 import { listReusableChannels, listReusableRoles, makeRole } from "../discord/setupDiscord.js";
+import { applyInventoryToConfig, scanGuildInventory } from "../discord/guildInventory.js";
 import { buildCustomInstallationStructure } from "./categoryWizard.js";
 import { configureRules } from "./rulesWizard.js";
 import { ensureAutomaticInfrastructure, type StructureConfig } from "./installationPlan.js";
@@ -154,6 +155,8 @@ async function quickConfig(
 
   const config = createQuickInstallConfig(guild.id, communityName, modules, promptValues);
   ensureAutomaticInfrastructure(config);
+  const inventoryResult = applyInventoryToConfig(config, scanGuildInventory(guild));
+  printInventorySummary(inventoryResult);
 
   await maybeReuseResources(guild, config);
   return config;
@@ -435,6 +438,10 @@ function needsInformationCategory(modules: ServerConfig["modules"]): boolean {
 
 async function maybeReuseResources(guild: Guild, config: Omit<ServerConfig, "welcome" | "rules">): Promise<void> {
   for (const [key, category] of Object.entries(config.categories)) {
+    if (category.id) {
+      console.log(`REUSED category ${category.name} (${category.id})`);
+      continue;
+    }
     if (key === "administration" && config.modules.logs) {
       continue;
     }
@@ -459,6 +466,10 @@ async function maybeReuseResources(guild: Guild, config: Omit<ServerConfig, "wel
   }
 
   for (const [key, channel] of Object.entries(config.channels)) {
+    if (channel.id) {
+      console.log(`REUSED channel #${channel.name} (${channel.id})`);
+      continue;
+    }
     if (channel.function === "logs") {
       continue;
     }
@@ -483,6 +494,13 @@ async function maybeReuseResources(guild: Guild, config: Omit<ServerConfig, "wel
   }
 
   for (const [key, role] of Object.entries(config.roles)) {
+    if (!role.enabled) {
+      continue;
+    }
+    if (role.id) {
+      console.log(`REUSED role ${role.name} (${role.id})`);
+      continue;
+    }
     const mode = await select<ResourceMode>({
       message: `Rol "${role.name}"`,
       choices: [
@@ -503,5 +521,14 @@ async function maybeReuseResources(guild: Guild, config: Omit<ServerConfig, "wel
     if (mode === "disabled") {
       config.roles[key] = { ...role, enabled: false };
     }
+  }
+}
+
+function printInventorySummary(result: ReturnType<typeof applyInventoryToConfig>): void {
+  for (const reused of result.reused) {
+    console.log(`Detectado y reutilizado: ${reused}`);
+  }
+  for (const ambiguous of result.ambiguous) {
+    console.log(`Coincidencia ambigua, requiere seleccion manual: ${ambiguous}`);
   }
 }

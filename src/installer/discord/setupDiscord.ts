@@ -106,7 +106,7 @@ export async function applyStructurePlan(guild: Guild, config: ServerConfig): Pr
     }
 
     for (const [key, channel] of Object.entries(config.channels)) {
-      const existing = await findChannel(guild, channel.id, channel.name);
+      const existing = await findChannel(guild, channel.id, channel.name, channel.type);
       if (existing) {
         channel.id = existing.id;
         channel.name = existing.name;
@@ -198,16 +198,20 @@ export async function findChannel(
   guild: Guild,
   id: string | undefined,
   name: string,
+  expectedType?: ChannelConfig["type"],
 ): Promise<NonThreadGuildBasedChannel | undefined> {
   if (id) {
     const channel = await guild.channels.fetch(id).catch(() => null);
-    if (channel && !channel.isThread()) {
+    if (channel && !channel.isThread() && isExpectedChannelType(channel, expectedType, guildSupportsAnnouncementChannels(guild))) {
       return channel;
     }
   }
 
   return guild.channels.cache.find(
-    (channel): channel is NonThreadGuildBasedChannel => !channel.isThread() && channel.name === name,
+    (channel): channel is NonThreadGuildBasedChannel =>
+      !channel.isThread() &&
+      channel.name === name &&
+      isExpectedChannelType(channel, expectedType, guildSupportsAnnouncementChannels(guild)),
   );
 }
 
@@ -254,6 +258,9 @@ export async function rollbackCreatedResources(
   const reverted: StructureChange[] = [];
 
   for (const resource of [...createdResources].reverse()) {
+    if (resource.action !== "create") {
+      continue;
+    }
     if (!resource.id) {
       continue;
     }
@@ -430,4 +437,15 @@ function normalizeUnsupportedChannelTypes(
       );
     }
   }
+}
+
+function isExpectedChannelType(
+  channel: NonThreadGuildBasedChannel,
+  expectedType: ChannelConfig["type"] | undefined,
+  allowAnnouncementChannels: boolean,
+): boolean {
+  if (!expectedType) {
+    return true;
+  }
+  return channel.type === toDiscordChannelType(expectedType, allowAnnouncementChannels);
 }

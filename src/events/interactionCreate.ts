@@ -10,6 +10,7 @@ import { RulesInteractionService } from "../services/rulesInteractionService.js"
 import { handleSlashCommand } from "../commands/index.js";
 import { handleTheIsleSelect } from "../modules/theIsleGuide/theIsleInteractionService.js";
 import { handleTikTokButton } from "../modules/tiktokAlerts/tiktokInteractionService.js";
+import { handleTikTokRepublishSelect } from "../modules/tiktokAlerts/tiktokInteractionService.js";
 
 export async function handleInteractionCreate(
   interaction: Interaction,
@@ -22,6 +23,9 @@ export async function handleInteractionCreate(
   }
 
   if (interaction.isStringSelectMenu()) {
+    if (await handleTikTokRepublishSelect(interaction, config, database)) {
+      return;
+    }
     if (await handleTheIsleSelect(interaction, config)) {
       return;
     }
