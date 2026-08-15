@@ -200,5 +200,10 @@ function makeServerConfig(): ServerConfig {
     theIsleGuide: {
       enabled: false,
     },
+    tiktokAlerts: {
+      enabled: false,
+      pollingIntervalSeconds: 300,
+      mention: "ninguna",
+    },
   };
 }

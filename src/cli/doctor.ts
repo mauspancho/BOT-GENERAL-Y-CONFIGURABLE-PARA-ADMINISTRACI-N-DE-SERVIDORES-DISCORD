@@ -8,6 +8,7 @@ import { readServerConfig } from "../core/config/configStore.js";
 import { openDatabase } from "../core/database/sqlite.js";
 import { createDiscordClient } from "../core/discord/client.js";
 import { validateBotPermissions } from "../installer/discord/setupDiscord.js";
+import { hasTikTokCredentials } from "../modules/tiktokAlerts/tiktokEnv.js";
 
 const args = parseArgs({
   options: {
@@ -30,6 +31,14 @@ try {
   diagnostic.guildId = config.guildId;
   diagnostic.communityName = config.communityName;
   diagnostic.modules = config.modules;
+  if (config.modules.tiktokAlerts) {
+    diagnostic.tiktok = {
+      credentials: hasTikTokCredentials() ? "configurado" : "incompleto",
+      clientSecret: process.env.TIKTOK_CLIENT_SECRET ? "configurado" : "no configurado",
+      redirectUri: process.env.TIKTOK_REDIRECT_URI ?? "default",
+      callback: `${process.env.TIKTOK_CALLBACK_HOST ?? "127.0.0.1"}:${process.env.TIKTOK_CALLBACK_PORT ?? "8787"}`,
+    };
+  }
   diagnostic.rulesVersion = config.rules.version;
 
   const database = await openDatabase(getDatabasePath());

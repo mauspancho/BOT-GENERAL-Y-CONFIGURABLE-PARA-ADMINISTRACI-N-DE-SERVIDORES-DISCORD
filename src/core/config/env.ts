@@ -11,6 +11,12 @@ export const envSchema = z.object({
   CONFIG_PATH: z.string().default("./config/server.json"),
   DATABASE_PATH: z.string().default("./data/bot.sqlite"),
   LOG_LEVEL: z.string().default("info"),
+  TIKTOK_CLIENT_KEY: z.string().optional(),
+  TIKTOK_CLIENT_SECRET: z.string().optional(),
+  TIKTOK_REDIRECT_URI: z.string().optional(),
+  TIKTOK_CALLBACK_HOST: z.string().optional(),
+  TIKTOK_CALLBACK_PORT: z.coerce.number().int().min(1).max(65_535).optional(),
+  TIKTOK_TOKEN_ENCRYPTION_KEY: z.string().optional(),
 });
 
 export type BotEnv = z.infer<typeof envSchema>;

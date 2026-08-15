@@ -341,6 +341,10 @@ function validateUniqueChannelFunctions(config: ServerConfig, result: StructureP
 
 function validateModuleResources(config: ServerConfig, result: StructurePreflightResult): void {
   const generalReason = config.modules.generalAlerts ? "modulo generalAlerts" : "core del servidor";
+  if (config.modules.tiktokAlerts && !config.modules.generalAlerts) {
+    result.errors.push("El modulo tiktokAlerts requiere modules.generalAlerts=true.");
+  }
+
   const requiredChannels: Array<[boolean, string, string]> = [
     [true, "general", generalReason],
     [config.modules.welcome && config.welcome.channelEnabled, "welcome", "modulo welcome"],
@@ -350,6 +354,7 @@ function validateModuleResources(config: ServerConfig, result: StructurePrefligh
     [config.modules.tickets, "tickets", "modulo tickets"],
     [config.modules.suggestions, "suggestions", "modulo suggestions"],
     [config.modules.logs, "logs", "infraestructura logs"],
+    [config.modules.tiktokAlerts, "general", "modulo tiktokAlerts"],
     [isTheIsleGuideEnabled(config), "theIsleGuide", "modulo theIsleGuide"],
   ];
 

@@ -25,6 +25,7 @@ export const moduleNames = [
   "moderation",
   "logs",
   "generalAlerts",
+  "tiktokAlerts",
   "theIsleGuide",
 ] as const;
 
@@ -55,6 +56,7 @@ export const modulesSchema = z.object({
   moderation: z.boolean(),
   logs: z.boolean(),
   generalAlerts: z.boolean().default(true),
+  tiktokAlerts: z.boolean().default(false),
   theIsleGuide: z.boolean().default(false),
 });
 
@@ -79,6 +81,14 @@ export const theIsleGuideConfigSchema = z
   })
   .default({ enabled: true });
 
+export const tiktokAlertsConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    pollingIntervalSeconds: z.number().int().min(60).max(86_400).default(300),
+    mention: z.enum(["ninguna", "everyone", "here"]).default("ninguna"),
+  })
+  .default({ enabled: false, pollingIntervalSeconds: 300, mention: "ninguna" });
+
 export const serverConfigSchema = z.object({
   version: z.literal(CONFIG_VERSION),
   guildId: z.string().min(1),
@@ -91,6 +101,7 @@ export const serverConfigSchema = z.object({
   rules: rulesConfigSchema,
   welcome: welcomeConfigSchema,
   theIsleGuide: theIsleGuideConfigSchema,
+  tiktokAlerts: tiktokAlertsConfigSchema,
 });
 
 export type LogicalChannelFunction = (typeof logicalChannelFunctions)[number];
@@ -99,6 +110,7 @@ export type ServerConfig = z.infer<typeof serverConfigSchema>;
 export type ChannelConfig = z.infer<typeof channelSchema>;
 export type RoleConfig = z.infer<typeof roleSchema>;
 export type TheIsleGuideConfig = z.infer<typeof theIsleGuideConfigSchema>;
+export type TikTokAlertsConfig = z.infer<typeof tiktokAlertsConfigSchema>;
 
 export function createDefaultModules(): ServerConfig["modules"] {
   return {
@@ -111,6 +123,7 @@ export function createDefaultModules(): ServerConfig["modules"] {
     moderation: false,
     logs: true,
     generalAlerts: true,
+    tiktokAlerts: false,
     theIsleGuide: false,
   };
 }

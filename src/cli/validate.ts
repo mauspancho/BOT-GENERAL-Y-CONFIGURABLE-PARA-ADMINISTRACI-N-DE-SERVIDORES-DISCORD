@@ -14,6 +14,7 @@ import {
   loadConfiguredTheIsleGuideFile,
   resolveTheIsleGuidePath,
 } from "../modules/theIsleGuide/theIsleGuideConfig.js";
+import { loadTikTokRuntimeConfig } from "../modules/tiktokAlerts/tiktokEnv.js";
 
 interface Check {
   name: string;
@@ -85,6 +86,33 @@ export async function runValidation(): Promise<Check[]> {
         action: "Run: npm run setup",
       });
     }
+  }
+
+  if (config?.modules.tiktokAlerts) {
+    try {
+      loadTikTokRuntimeConfig();
+      checks.push({ name: "TikTok credentials", ok: true, message: "Client Secret: configurado" });
+    } catch (error) {
+      checks.push({
+        name: "TikTok credentials",
+        ok: false,
+        message: error instanceof Error ? error.message : "Configuracion TikTok invalida.",
+        action: "Run: npm run setup",
+      });
+    }
+
+    checks.push({
+      name: "TikTok generalAlerts dependency",
+      ok: config.modules.generalAlerts,
+      message: config.modules.generalAlerts ? undefined : "tiktokAlerts requiere generalAlerts activo.",
+      action: config.modules.generalAlerts ? undefined : "Run: npm run setup",
+    });
+    checks.push({
+      name: "TikTok general channel",
+      ok: Boolean(config.channels.general?.id),
+      message: config.channels.general?.id ? undefined : "Falta config.channels.general.id.",
+      action: "Run: npm run setup",
+    });
   }
 
   if (envParsed.success && config) {

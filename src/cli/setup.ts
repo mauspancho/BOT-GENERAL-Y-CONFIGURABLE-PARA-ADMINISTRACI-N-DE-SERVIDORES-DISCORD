@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { confirm, select } from "@inquirer/prompts";
+import { confirm, input, password, select } from "@inquirer/prompts";
 import { Events } from "discord.js";
 import type { Guild } from "discord.js";
 import { createDiscordClient } from "../core/discord/client.js";
@@ -16,7 +16,7 @@ import {
   validateBotPermissions,
 } from "../installer/discord/setupDiscord.js";
 import { buildInstallationConfig } from "../installer/wizard/configFactory.js";
-import { writeEnvFile } from "../installer/wizard/envWriter.js";
+import { readEnvFile, writeEnvFile } from "../installer/wizard/envWriter.js";
 import { formatInstallationTree } from "../utils/formatPlan.js";
 import { PersistentMessageRepository } from "../repositories/persistentMessageRepository.js";
 import { ensureRulesPanel } from "../services/rulesPanelService.js";
@@ -70,7 +70,6 @@ async function main(): Promise<void> {
 }
 
 async function runInstall(): Promise<void> {
-  const { password, input } = await import("@inquirer/prompts");
   const token = await password({ message: "Token del bot:", mask: "*" });
   const clientId = await input({ message: "Application / Client ID:" });
   writeEnvFile({ token, clientId });
@@ -101,6 +100,7 @@ async function runInstall(): Promise<void> {
     await client.destroy();
     return;
   }
+  await configureTikTokEnv(config.modules.tiktokAlerts);
 
   if (configExists(getConfigPath())) {
     createBackup("pre-setup-change");
@@ -133,6 +133,86 @@ async function runInstall(): Promise<void> {
     console.log(`${change.action.toUpperCase()} ${change.resourceType} ${change.name}${change.id ? ` (${change.id})` : ""}`);
   }
   console.log("\nConfiguracion guardada en config/server.json.");
+}
+
+async function configureTikTokEnv(enabled: boolean): Promise<void> {
+  if (!enabled) {
+    return;
+  }
+
+  const current = readEnvFile().values;
+  const hasClientKey = Boolean(current.get("TIKTOK_CLIENT_KEY"));
+  const hasClientSecret = Boolean(current.get("TIKTOK_CLIENT_SECRET"));
+  console.log("\nConfiguracion TikTok:");
+  console.log(`Client Key: ${hasClientKey ? "configurado" : "no configurado"}`);
+  console.log(`Client Secret: ${hasClientSecret ? "configurado" : "no configurado"}`);
+  console.log(`Redirect URI: ${current.get("TIKTOK_REDIRECT_URI") ?? "https://tiktok.linuxred.lat/tiktok/callback"}`);
+  console.log(`Callback: ${current.get("TIKTOK_CALLBACK_HOST") ?? "127.0.0.1"}:${current.get("TIKTOK_CALLBACK_PORT") ?? "8787"}`);
+
+  const credentialAction =
+    hasClientKey && hasClientSecret
+      ? await select<"keep" | "modify">({
+          message: "Credenciales TikTok:",
+          choices: [
+            { name: "Mantener credenciales existentes", value: "keep" },
+            { name: "Modificar credenciales", value: "modify" },
+          ],
+        })
+      : "modify";
+
+  const tiktokClientKey =
+    credentialAction === "modify"
+      ? await input({
+          message: "TikTok Client Key:",
+          validate: (value) => value.trim().length > 0 || "TikTok Client Key es obligatorio.",
+        })
+      : undefined;
+  const tiktokClientSecret =
+    credentialAction === "modify"
+      ? await password({
+          message: "TikTok Client Secret:",
+          mask: "*",
+          validate: (value) => value.trim().length > 0 || "TikTok Client Secret es obligatorio.",
+        })
+      : undefined;
+  const tiktokRedirectUri = await input({
+    message: "TikTok Redirect URI:",
+    default: current.get("TIKTOK_REDIRECT_URI") ?? "https://tiktok.linuxred.lat/tiktok/callback",
+    validate(value) {
+      try {
+        const url = new URL(value);
+        return url.protocol === "https:" ? true : "Redirect URI debe ser HTTPS.";
+      } catch {
+        return "Redirect URI invalida.";
+      }
+    },
+  });
+  const tiktokCallbackHost = await input({
+    message: "TikTok Callback host:",
+    default: current.get("TIKTOK_CALLBACK_HOST") ?? "127.0.0.1",
+    validate: (value) => value.trim().length > 0 || "Callback host es obligatorio.",
+  });
+  const tiktokCallbackPort = Number(
+    await input({
+      message: "TikTok Callback port:",
+      default: current.get("TIKTOK_CALLBACK_PORT") ?? "8787",
+      validate(value) {
+        const parsed = Number(value);
+        return Number.isInteger(parsed) && parsed > 0 && parsed <= 65_535
+          ? true
+          : "Puerto invalido.";
+      },
+    }),
+  );
+
+  writeEnvFile({
+    ...(tiktokClientKey ? { tiktokClientKey } : {}),
+    ...(tiktokClientSecret ? { tiktokClientSecret } : {}),
+    tiktokRedirectUri,
+    tiktokCallbackHost,
+    tiktokCallbackPort,
+    ensureTikTokEncryptionKey: true,
+  });
 }
 
 async function runStructureOnly(): Promise<void> {

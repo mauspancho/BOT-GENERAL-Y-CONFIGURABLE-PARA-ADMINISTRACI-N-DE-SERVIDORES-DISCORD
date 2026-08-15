@@ -301,6 +301,11 @@ function makeConfig(enabled: boolean, sourcePath?: string): ServerConfig {
       : {
           enabled,
         },
+    tiktokAlerts: {
+      enabled: false,
+      pollingIntervalSeconds: 300,
+      mention: "ninguna",
+    },
   };
 }
 

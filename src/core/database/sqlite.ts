@@ -65,6 +65,45 @@ const migrations = [
       );
     `,
   },
+  {
+    id: 2,
+    sql: `
+      CREATE TABLE IF NOT EXISTS tiktok_oauth_states (
+        state TEXT PRIMARY KEY,
+        guild_id TEXT NOT NULL,
+        discord_user_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        used INTEGER NOT NULL DEFAULT 0
+      );
+
+      CREATE TABLE IF NOT EXISTS tiktok_connections (
+        guild_id TEXT PRIMARY KEY,
+        open_id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        avatar_url TEXT,
+        scopes TEXT NOT NULL,
+        encrypted_access_token TEXT NOT NULL,
+        encrypted_refresh_token TEXT NOT NULL,
+        connected_at TEXT NOT NULL,
+        access_token_expires_at TEXT NOT NULL,
+        refresh_token_expires_at TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        last_check_at TEXT,
+        last_success_at TEXT,
+        last_video_id TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS tiktok_published_videos (
+        guild_id TEXT NOT NULL,
+        open_id TEXT NOT NULL,
+        video_id TEXT NOT NULL,
+        create_time INTEGER,
+        published_at TEXT NOT NULL,
+        PRIMARY KEY (guild_id, open_id, video_id)
+      );
+    `,
+  },
 ];
 
 export async function openDatabase(databasePath: string): Promise<Database> {

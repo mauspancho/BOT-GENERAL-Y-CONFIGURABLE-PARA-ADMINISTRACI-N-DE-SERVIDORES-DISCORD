@@ -6,6 +6,7 @@ import { botStatusCommand } from "./botStatus.js";
 import { configStatusCommand } from "./configStatus.js";
 import { guideCommand } from "./guide.js";
 import { rulesCommand } from "./rules.js";
+import { tiktokCommand } from "./tiktok.js";
 import type { SlashCommand } from "./commandTypes.js";
 
 export const allCommands: SlashCommand[] = [
@@ -14,6 +15,7 @@ export const allCommands: SlashCommand[] = [
   configStatusCommand,
   rulesCommand,
   guideCommand,
+  tiktokCommand,
 ];
 
 export function enabledCommands(config: ServerConfig): SlashCommand[] {

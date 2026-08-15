@@ -9,6 +9,7 @@ import {
 import { RulesInteractionService } from "../services/rulesInteractionService.js";
 import { handleSlashCommand } from "../commands/index.js";
 import { handleTheIsleSelect } from "../modules/theIsleGuide/theIsleInteractionService.js";
+import { handleTikTokButton } from "../modules/tiktokAlerts/tiktokInteractionService.js";
 
 export async function handleInteractionCreate(
   interaction: Interaction,
@@ -27,6 +28,10 @@ export async function handleInteractionCreate(
   }
 
   if (!interaction.isButton()) {
+    return;
+  }
+
+  if (await handleTikTokButton(interaction, config, database)) {
     return;
   }
 

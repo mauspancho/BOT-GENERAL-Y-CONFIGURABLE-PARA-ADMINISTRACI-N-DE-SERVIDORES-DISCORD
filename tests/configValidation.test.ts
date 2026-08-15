@@ -35,6 +35,11 @@ describe("server config validation", () => {
       theIsleGuide: {
         enabled: false,
       },
+      tiktokAlerts: {
+        enabled: false,
+        pollingIntervalSeconds: 300,
+        mention: "ninguna",
+      },
     });
 
     expect(parsed.guildId).toBe("123");

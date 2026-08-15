@@ -62,6 +62,7 @@ export function createEmptyStructureConfig(
     roles: {},
     modules,
     theIsleGuide: { enabled: false },
+    tiktokAlerts: { enabled: false, pollingIntervalSeconds: 300, mention: "ninguna" },
   };
 }
 

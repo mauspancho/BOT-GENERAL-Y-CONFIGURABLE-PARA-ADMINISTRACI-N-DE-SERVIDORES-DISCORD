@@ -4,6 +4,7 @@ import { logsModule } from "./logs/logsModule.js";
 import { rulesModule } from "./rules/rulesModule.js";
 import { selfRolesModule } from "./selfRoles/selfRolesModule.js";
 import { theIsleGuideModule } from "./theIsleGuide/theIsleGuideModule.js";
+import { tiktokAlertsModule } from "./tiktokAlerts/tiktokAlertsModule.js";
 import { welcomeModule } from "./welcome/welcomeModule.js";
 
 export const modules: BotModule[] = [
@@ -11,6 +12,7 @@ export const modules: BotModule[] = [
   rulesModule,
   logsModule,
   generalAlertsModule,
+  tiktokAlertsModule,
   selfRolesModule,
   theIsleGuideModule,
 ];

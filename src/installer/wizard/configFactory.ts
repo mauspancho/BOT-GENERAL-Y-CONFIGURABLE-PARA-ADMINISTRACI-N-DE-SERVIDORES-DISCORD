@@ -43,6 +43,7 @@ export async function buildInstallationConfig(guild: Guild, existingConfig?: Ser
       { name: "Reglas", value: "rules", checked: modules.rules },
       { name: "Logs", value: "logs", checked: modules.logs },
       { name: "Alertas al canal general", value: "generalAlerts", checked: modules.generalAlerts },
+      { name: "Alertas automaticas de TikTok", value: "tiktokAlerts", checked: modules.tiktokAlerts },
       { name: "Self-roles (base Fase 2)", value: "selfRoles", checked: modules.selfRoles },
       { name: "Anuncios", value: "announcements", checked: modules.announcements },
       { name: "Tickets (base Fase 2)", value: "tickets", checked: modules.tickets },
@@ -58,6 +59,7 @@ export async function buildInstallationConfig(guild: Guild, existingConfig?: Ser
   }
 
   const theIsleGuide = await configureTheIsleGuide(modules, existingConfig?.theIsleGuide.sourcePath);
+  const tiktokAlerts = await configureTikTokAlerts(modules, existingConfig?.tiktokAlerts);
 
   const base =
     installMode === "quick"
@@ -103,6 +105,7 @@ export async function buildInstallationConfig(guild: Guild, existingConfig?: Ser
       rejectAction,
     },
     theIsleGuide,
+    tiktokAlerts,
   };
 }
 
@@ -249,9 +252,76 @@ export function createQuickInstallConfig(
     roles,
     modules,
     theIsleGuide: createTheIsleGuideConfig(modules, values.theIsleGuideSourcePath),
+    tiktokAlerts: defaultTikTokAlertsConfig(modules.tiktokAlerts),
   };
   ensureAutomaticInfrastructure(config);
   return config;
+}
+
+export async function configureTikTokAlerts(
+  modules: ServerConfig["modules"],
+  currentConfig?: ServerConfig["tiktokAlerts"],
+): Promise<ServerConfig["tiktokAlerts"]> {
+  if (!modules.tiktokAlerts) {
+    return defaultTikTokAlertsConfig(false);
+  }
+
+  if (currentConfig?.enabled) {
+    console.log("\nConfiguracion TikTok actual:");
+    console.log(`  Polling: ${currentConfig.pollingIntervalSeconds} segundos`);
+    console.log(`  Mencion: ${currentConfig.mention}`);
+    const action = await select<"keep" | "modify" | "disable">({
+      message: "Configuracion TikTok Alerts:",
+      choices: [
+        { name: "Mantener", value: "keep" },
+        { name: "Modificar", value: "modify" },
+        { name: "Desactivar modulo", value: "disable" },
+      ],
+    });
+
+    if (action === "keep") {
+      return currentConfig;
+    }
+
+    if (action === "disable") {
+      modules.tiktokAlerts = false;
+      return defaultTikTokAlertsConfig(false);
+    }
+  }
+
+  const pollingIntervalSeconds = Number(
+    await input({
+      message: "Intervalo de comprobacion TikTok (segundos):",
+      default: String(currentConfig?.pollingIntervalSeconds ?? 300),
+      validate(value) {
+        const parsed = Number(value);
+        return Number.isInteger(parsed) && parsed >= 60 ? true : "Use un entero de al menos 60 segundos.";
+      },
+    }),
+  );
+  const mention = await select<ServerConfig["tiktokAlerts"]["mention"]>({
+    message: "Mencion por defecto TikTok:",
+    choices: [
+      { name: "ninguna", value: "ninguna" },
+      { name: "everyone", value: "everyone" },
+      { name: "here", value: "here" },
+    ],
+    default: currentConfig?.mention ?? "ninguna",
+  });
+
+  return {
+    enabled: true,
+    pollingIntervalSeconds,
+    mention,
+  };
+}
+
+function defaultTikTokAlertsConfig(enabled: boolean): ServerConfig["tiktokAlerts"] {
+  return {
+    enabled,
+    pollingIntervalSeconds: 300,
+    mention: "ninguna",
+  };
 }
 
 export async function configureTheIsleGuide(

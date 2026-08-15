@@ -20,6 +20,9 @@ export interface GeneralAlert {
   type?: GeneralAlertType;
   mention?: GeneralAlertMention;
   source?: string;
+  title?: string;
+  url?: string;
+  thumbnailUrl?: string;
 }
 
 export interface GeneralAlertResult {
@@ -74,11 +77,17 @@ export async function sendGeneralAlert(
   const presentation = alertPresentation[type];
   const mentionContent = mention === "everyone" ? "@everyone" : mention === "here" ? "@here" : undefined;
   const embed = new EmbedBuilder()
-    .setTitle(presentation.title)
+    .setTitle(alert.title ?? presentation.title)
     .setColor(presentation.color)
     .setDescription(message)
     .setFooter({ text: config.communityName })
     .setTimestamp(new Date());
+  if (alert.url) {
+    embed.setURL(alert.url);
+  }
+  if (alert.thumbnailUrl) {
+    embed.setThumbnail(alert.thumbnailUrl);
+  }
 
   await channel.send({
     ...(mentionContent ? { content: mentionContent } : {}),

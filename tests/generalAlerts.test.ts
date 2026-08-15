@@ -305,6 +305,11 @@ function makeConfig(generalAlerts: boolean): ServerConfig {
     theIsleGuide: {
       enabled: false,
     },
+    tiktokAlerts: {
+      enabled: false,
+      pollingIntervalSeconds: 300,
+      mention: "ninguna",
+    },
   };
 }
 
@@ -318,6 +323,7 @@ function minimalModules(): ServerConfig["modules"] {
   modules.suggestions = false;
   modules.moderation = false;
   modules.logs = false;
+  modules.tiktokAlerts = false;
   modules.theIsleGuide = false;
   return modules;
 }

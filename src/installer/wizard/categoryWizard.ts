@@ -110,5 +110,6 @@ function toPreviewConfig(config: StructureConfig): ServerConfig {
       message: "Bienvenido {user} a {server}!",
     },
     theIsleGuide: config.theIsleGuide,
+    tiktokAlerts: config.tiktokAlerts,
   };
 }

@@ -15,6 +15,8 @@ const env = loadEnv();
 const config = readServerConfig(getConfigPath());
 const database = await openDatabase(getDatabasePath());
 const client = createDiscordClient();
+const startedModules: ReturnType<typeof enabledModules> = [];
+const moduleContext = { client, config, database, logger };
 
 client.once(Events.ClientReady, () => {
   void (async () => {
@@ -22,7 +24,8 @@ client.once(Events.ClientReady, () => {
     await registerGuildCommands(env.DISCORD_TOKEN, env.DISCORD_CLIENT_ID, config);
 
     for (const module of enabledModules(config)) {
-      await module.start({ client, config, database, logger });
+      await module.start(moduleContext);
+      startedModules.push(module);
     }
   })().catch((error: unknown) => {
     logger.error({ error }, "clientReady handler failed");
@@ -43,6 +46,9 @@ client.on("interactionCreate", (interaction) => {
 
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
   logger.info({ signal }, "Shutting down");
+  for (const module of [...startedModules].reverse()) {
+    await module.stop?.(moduleContext);
+  }
   await client.destroy();
   database.close();
 }

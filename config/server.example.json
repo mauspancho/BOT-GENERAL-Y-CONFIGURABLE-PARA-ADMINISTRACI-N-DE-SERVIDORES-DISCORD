@@ -66,6 +66,7 @@
     "moderation": false,
     "logs": true,
     "generalAlerts": true,
+    "tiktokAlerts": false,
     "theIsleGuide": false
   },
   "rules": {
@@ -83,5 +84,10 @@
   "theIsleGuide": {
     "enabled": false,
     "sourcePath": "./data/the-isle/dinosaurs.md"
+  },
+  "tiktokAlerts": {
+    "enabled": false,
+    "pollingIntervalSeconds": 300,
+    "mention": "ninguna"
   }
 }
