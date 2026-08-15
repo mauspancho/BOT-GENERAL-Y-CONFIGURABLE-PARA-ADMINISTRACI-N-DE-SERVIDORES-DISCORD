@@ -2,9 +2,10 @@ import { once } from "node:events";
 import { confirm, input, password, select } from "@inquirer/prompts";
 import { Events } from "discord.js";
 import type { Guild } from "discord.js";
+import type { ServerConfig } from "../core/config/schema.js";
 import { createDiscordClient } from "../core/discord/client.js";
-import { getConfigPath, getDatabasePath } from "../core/config/paths.js";
-import { configExists, readServerConfig, writeServerConfig } from "../core/config/configStore.js";
+import { GuildConfigManager } from "../core/config/guildConfigManager.js";
+import { getDatabasePath } from "../core/config/paths.js";
 import { loadEnv } from "../core/config/env.js";
 import { openDatabase } from "../core/database/sqlite.js";
 import { createBackup, listBackups, restoreBackup } from "../installer/backup/backupService.js";
@@ -23,6 +24,8 @@ import { ensureRulesPanel } from "../services/rulesPanelService.js";
 import { registerGuildCommands } from "../commands/register.js";
 
 async function main(): Promise<void> {
+  const configManager = new GuildConfigManager();
+  configManager.migrateLegacyConfig();
   console.log("========================================");
   console.log("      Discord Community Bot Setup");
   console.log("========================================");
@@ -32,22 +35,25 @@ async function main(): Promise<void> {
     const option = await select({
       message: "Seleccione una opcion:",
       choices: [
-        { name: "Instalacion inicial", value: "install" },
-        { name: "Modificar configuracion", value: "modify" },
+        { name: "Agregar/configurar servidor Discord", value: "install" },
+        { name: "Modificar servidor existente", value: "modify" },
         { name: "Crear o modificar estructura Discord", value: "structure" },
-        { name: "Validar instalacion", value: "validate" },
+        { name: "Validar servidor", value: "validate" },
+        { name: "Mostrar servidores configurados", value: "show" },
         { name: "Crear backup", value: "backup" },
         { name: "Restaurar backup", value: "restore" },
-        { name: "Mostrar configuracion", value: "show" },
         { name: "Salir", value: "exit" },
       ],
     });
 
-    if (option === "install" || option === "modify") {
-      await runInstall();
+    if (option === "install") {
+      await runInstall(configManager, "add");
+    }
+    if (option === "modify") {
+      await runInstall(configManager, "modify");
     }
     if (option === "structure") {
-      await runStructureOnly();
+      await runStructureOnly(configManager);
     }
     if (option === "validate") {
       const { runValidation } = await import("./validate.js");
@@ -61,7 +67,7 @@ async function main(): Promise<void> {
       await runRestore();
     }
     if (option === "show") {
-      console.log(JSON.stringify(readServerConfig(getConfigPath()), null, 2));
+      showConfiguredGuilds(configManager);
     }
     if (option === "exit") {
       exit = true;
@@ -69,7 +75,7 @@ async function main(): Promise<void> {
   }
 }
 
-async function runInstall(): Promise<void> {
+async function runInstall(configManager: GuildConfigManager, mode: "add" | "modify"): Promise<void> {
   const token = await password({ message: "Token del bot:", mask: "*" });
   const clientId = await input({ message: "Application / Client ID:" });
   writeEnvFile({ token, clientId });
@@ -86,15 +92,18 @@ async function runInstall(): Promise<void> {
     throw new Error("El bot no esta en ningun servidor Discord.");
   }
 
-  const guildId = await select({
-    message: "Seleccione servidor:",
-    choices: guilds.map((guild) => ({ name: guild.name, value: guild.id })),
-  });
+  const guildId =
+    mode === "modify"
+      ? await selectConfiguredGuild(configManager)
+      : await select({
+          message: "Seleccione servidor:",
+          choices: guilds.map((guild) => ({ name: guild.name, value: guild.id })),
+        });
   const guild = await client.guilds.fetch(guildId);
   await guild.channels.fetch();
   await guild.roles.fetch();
 
-  const existingConfig = configExists(getConfigPath()) ? readServerConfig(getConfigPath()) : undefined;
+  const existingConfig = configManager.find(guildId);
   const config = await buildConfigUntilApproved(guild, existingConfig);
   if (!config) {
     await client.destroy();
@@ -102,7 +111,7 @@ async function runInstall(): Promise<void> {
   }
   await configureTikTokEnv(config.modules.tiktokAlerts);
 
-  if (configExists(getConfigPath())) {
+  if (existingConfig) {
     createBackup("pre-setup-change");
   }
 
@@ -121,7 +130,7 @@ async function runInstall(): Promise<void> {
     await client.destroy();
     return;
   }
-  writeServerConfig(getConfigPath(), config);
+  configManager.save(config.guildId, config);
   const database = await openDatabase(getDatabasePath());
   await registerGuildCommands(token, clientId, config);
   await ensureRulesPanel(client, config, new PersistentMessageRepository(database));
@@ -132,7 +141,7 @@ async function runInstall(): Promise<void> {
   for (const change of changes) {
     console.log(`${change.action.toUpperCase()} ${change.resourceType} ${change.name}${change.id ? ` (${change.id})` : ""}`);
   }
-  console.log("\nConfiguracion guardada en config/server.json.");
+  console.log(`\nConfiguracion guardada en ${configManager.pathFor(config.guildId)}.`);
 }
 
 async function configureTikTokEnv(enabled: boolean): Promise<void> {
@@ -215,9 +224,10 @@ async function configureTikTokEnv(enabled: boolean): Promise<void> {
   });
 }
 
-async function runStructureOnly(): Promise<void> {
+async function runStructureOnly(configManager: GuildConfigManager): Promise<void> {
   const env = loadEnv();
-  const config = readServerConfig(getConfigPath());
+  const guildId = await selectConfiguredGuild(configManager);
+  const config = configManager.get(guildId);
   const client = createDiscordClient();
   await client.login(env.DISCORD_TOKEN);
   if (!client.isReady()) {
@@ -247,14 +257,38 @@ async function runStructureOnly(): Promise<void> {
     await client.destroy();
     return;
   }
-  writeServerConfig(getConfigPath(), config);
+  configManager.save(config.guildId, config);
   await client.destroy();
   console.log(`Cambios procesados: ${changes.length}`);
 }
 
+async function selectConfiguredGuild(configManager: GuildConfigManager): Promise<string> {
+  const configs = configManager.list();
+  if (configs.length === 0) {
+    throw new Error("No hay servidores configurados.");
+  }
+
+  return select({
+    message: "Seleccione servidor configurado:",
+    choices: configs.map((config) => ({ name: `${config.communityName} (${config.guildId})`, value: config.guildId })),
+  });
+}
+
+function showConfiguredGuilds(configManager: GuildConfigManager): void {
+  const configs = configManager.list();
+  if (configs.length === 0) {
+    console.log("No hay servidores configurados.");
+    return;
+  }
+
+  for (const config of configs) {
+    console.log(`${config.communityName} (${config.guildId}) - ${configManager.pathFor(config.guildId)}`);
+  }
+}
+
 async function buildConfigUntilApproved(
   guild: Guild,
-  existingConfig?: ReturnType<typeof readServerConfig>,
+  existingConfig?: ServerConfig,
 ): Promise<Awaited<ReturnType<typeof buildInstallationConfig>> | undefined> {
   let retry = true;
 

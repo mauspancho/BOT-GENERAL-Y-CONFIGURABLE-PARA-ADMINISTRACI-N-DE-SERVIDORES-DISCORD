@@ -111,6 +111,13 @@ export class TikTokRepository {
     return row ? mapConnection(row) : undefined;
   }
 
+  public listEnabledConnections(): TikTokConnection[] {
+    return this.database
+      .prepare("SELECT * FROM tiktok_connections WHERE enabled = 1")
+      .all()
+      .map((row) => mapConnection(row as TikTokConnectionRow));
+  }
+
   public setConnectionEnabled(guildId: string, enabled: boolean): void {
     this.database.prepare("UPDATE tiktok_connections SET enabled = ? WHERE guild_id = ?").run(enabled ? 1 : 0, guildId);
   }

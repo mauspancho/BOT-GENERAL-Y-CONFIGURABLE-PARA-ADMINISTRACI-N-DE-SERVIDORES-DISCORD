@@ -1,13 +1,15 @@
-import type { BotModule, BotModuleContext } from "../../types/BotModule.js";
+import type { Client } from "discord.js";
+import type { GuildConfigManager } from "../../core/config/guildConfigManager.js";
+import type { Database } from "../../core/database/sqlite.js";
+import type { AppLogger } from "../../core/logger/logger.js";
 import { TikTokRepository } from "../../repositories/tiktokRepository.js";
 import { sendDiscordLog } from "../../services/discordLogService.js";
+import type { BotModule } from "../../types/BotModule.js";
 import { TikTokApiClient } from "./tiktokApiClient.js";
 import { checkTikTokVideos } from "./tiktokAlertService.js";
 import { TikTokCallbackServer } from "./tiktokCallbackServer.js";
 import { hasTikTokCredentials, loadTikTokRuntimeConfig } from "./tiktokEnv.js";
-
-const runtimes = new WeakMap<BotModuleContext, TikTokModuleRuntime>();
-let singletonRuntime: TikTokModuleRuntime | undefined;
+import type { TikTokRuntimeConfig } from "./tiktokTypes.js";
 
 export const tiktokAlertsModule: BotModule = {
   name: "tiktokAlerts",
@@ -27,60 +29,57 @@ export const tiktokAlertsModule: BotModule = {
   register() {
     return Promise.resolve();
   },
-  async start(context) {
-    const runtime = new TikTokModuleRuntime(context);
-    singletonRuntime = runtime;
-    runtimes.set(context, runtime);
-    await runtime.start();
-  },
-  async stop(context) {
-    const runtime = runtimes.get(context) ?? singletonRuntime;
-    await runtime?.stop();
+  start() {
+    return Promise.resolve();
   },
 };
 
-export class TikTokModuleRuntime {
+export class TikTokMultiGuildRuntime {
   private callbackServer: TikTokCallbackServer | undefined;
   private timer: NodeJS.Timeout | undefined;
+  private readonly repository: TikTokRepository;
+  private readonly runtime: TikTokRuntimeConfig;
+  private readonly api: TikTokApiClient;
 
-  public constructor(private readonly context: BotModuleContext) {}
+  public constructor(
+    private readonly client: Client,
+    private readonly configManager: GuildConfigManager,
+    database: Database,
+    private readonly logger: AppLogger,
+    dependencies?: {
+      repository?: TikTokRepository;
+      runtime?: TikTokRuntimeConfig;
+      api?: TikTokApiClient;
+    },
+  ) {
+    this.repository = dependencies?.repository ?? new TikTokRepository(database);
+    this.runtime = dependencies?.runtime ?? loadTikTokRuntimeConfig();
+    this.api = dependencies?.api ?? new TikTokApiClient(this.runtime);
+  }
 
   public async start(): Promise<void> {
-    if (!this.context.config.modules.tiktokAlerts) {
+    const tiktokConfigs = this.configManager.list().filter((config) => config.modules.tiktokAlerts);
+    if (tiktokConfigs.length === 0) {
       return;
     }
 
-    const runtime = loadTikTokRuntimeConfig();
-    const repository = new TikTokRepository(this.context.database);
-    const api = new TikTokApiClient(runtime);
     this.callbackServer = new TikTokCallbackServer(
-      this.context.client,
-      this.context.config,
-      repository,
-      api,
-      runtime,
+      this.client,
+      this.configManager,
+      this.repository,
+      this.api,
+      this.runtime,
     );
     await this.callbackServer.start();
-    await sendDiscordLog(this.context.client, this.context.config, "[TIKTOK]\nCallback OAuth iniciado.");
 
-    const connection = repository.findConnection(this.context.config.guildId);
-    if (!connection?.enabled) {
-      return;
+    for (const config of tiktokConfigs) {
+      await sendDiscordLog(this.client, config, "[TIKTOK]\nCallback OAuth iniciado.");
     }
 
     this.timer = setInterval(() => {
-      void checkTikTokVideos(this.context.client, this.context.config, repository, api, runtime, {
-        mention: this.context.config.tiktokAlerts.mention,
-      }).catch((error: unknown) => {
-        this.context.logger.error({ error }, "TikTok polling failed");
-        void sendDiscordLog(
-          this.context.client,
-          this.context.config,
-          `[TIKTOK]\nError de polling: ${error instanceof Error ? error.message : "Error desconocido."}`,
-        );
-      });
-    }, this.context.config.tiktokAlerts.pollingIntervalSeconds * 1000);
-    await sendDiscordLog(this.context.client, this.context.config, "[TIKTOK]\nPolling iniciado.");
+      void this.tick();
+    }, 30_000);
+    void this.tick();
   }
 
   public async stop(): Promise<void> {
@@ -88,7 +87,43 @@ export class TikTokModuleRuntime {
       clearInterval(this.timer);
       this.timer = undefined;
     }
+
     await this.callbackServer?.stop();
     this.callbackServer = undefined;
+  }
+
+  public async tick(now = new Date()): Promise<void> {
+    const connections = this.repository.listEnabledConnections();
+    for (const connection of connections) {
+      const config = this.configManager.find(connection.guildId);
+      if (!config?.modules.tiktokAlerts) {
+        continue;
+      }
+
+      if (!this.isDue(connection.lastCheckAt, config.tiktokAlerts.pollingIntervalSeconds, now)) {
+        continue;
+      }
+
+      try {
+        await checkTikTokVideos(this.client, config, this.repository, this.api, this.runtime, {
+          mention: config.tiktokAlerts.mention,
+        });
+      } catch (error) {
+        this.logger.error({ error, guildId: connection.guildId }, "TikTok polling failed");
+        await sendDiscordLog(
+          this.client,
+          config,
+          `[TIKTOK]\nError de polling: ${error instanceof Error ? error.message : "Error desconocido."}`,
+        );
+      }
+    }
+  }
+
+  private isDue(lastCheckAt: string | undefined, intervalSeconds: number, now: Date): boolean {
+    if (!lastCheckAt) {
+      return true;
+    }
+
+    return now.getTime() - new Date(lastCheckAt).getTime() >= intervalSeconds * 1000;
   }
 }

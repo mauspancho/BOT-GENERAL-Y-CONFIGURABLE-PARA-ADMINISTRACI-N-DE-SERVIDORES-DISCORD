@@ -94,7 +94,7 @@ describe("tiktok alerts", () => {
 
   it("rejects callback without code and invalid state without leaking secrets", async () => {
     const database = await openMemoryDatabase();
-    const server = new TikTokCallbackServer(makeClient() as never, makeConfig(true), new TikTokRepository(database), makeApi(), runtime());
+    const server = new TikTokCallbackServer(makeClient() as never, makeConfigManager([makeConfig(true)]), new TikTokRepository(database), makeApi(), runtime());
     await server.start();
     const address = server.address();
     const port = typeof address === "object" && address ? address.port : 0;
@@ -269,7 +269,7 @@ describe("tiktok alerts", () => {
   it("callback HTTP listens only on configured host", async () => {
     const database = await openMemoryDatabase();
     const configured = runtime();
-    const server = new TikTokCallbackServer(makeClient() as never, makeConfig(true), new TikTokRepository(database), makeApi(), configured);
+    const server = new TikTokCallbackServer(makeClient() as never, makeConfigManager([makeConfig(true)]), new TikTokRepository(database), makeApi(), configured);
     await server.start();
     const address = server.address();
 
@@ -471,6 +471,21 @@ function makeConfig(enabled: boolean, mention: ServerConfig["tiktokAlerts"]["men
       mention,
     },
   };
+}
+
+function makeConfigManager(configs: ServerConfig[]) {
+  const map = new Map(configs.map((config) => [config.guildId, config]));
+  return {
+    get: (guildId: string) => {
+      const config = map.get(guildId);
+      if (!config) {
+        throw new Error(`Missing config ${guildId}`);
+      }
+      return config;
+    },
+    find: (guildId: string) => map.get(guildId),
+    list: () => [...map.values()],
+  } as never;
 }
 
 interface AlertPayload {

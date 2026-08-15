@@ -10,6 +10,10 @@ export function getConfigPath(): string {
   return resolveFromRoot(process.env.CONFIG_PATH ?? "./config/server.json");
 }
 
+export function getGuildConfigsDir(): string {
+  return resolveFromRoot(process.env.GUILD_CONFIGS_DIR ?? "./config/guilds");
+}
+
 export function getDatabasePath(): string {
   return resolveFromRoot(process.env.DATABASE_PATH ?? "./data/bot.sqlite");
 }

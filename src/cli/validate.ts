@@ -3,8 +3,9 @@ import { pathToFileURL } from "node:url";
 import { Events } from "discord.js";
 import { z } from "zod";
 import { envSchema } from "../core/config/env.js";
-import { getConfigPath, getDatabasePath } from "../core/config/paths.js";
-import { readServerConfig } from "../core/config/configStore.js";
+import { GuildConfigManager } from "../core/config/guildConfigManager.js";
+import { getDatabasePath } from "../core/config/paths.js";
+import type { ServerConfig } from "../core/config/schema.js";
 import { openDatabase } from "../core/database/sqlite.js";
 import { createDiscordClient } from "../core/discord/client.js";
 import { validateBotPermissions } from "../installer/discord/setupDiscord.js";
@@ -35,10 +36,17 @@ export async function runValidation(): Promise<Check[]> {
     action: "Revise .env y .env.example.",
   });
 
-  let config: ReturnType<typeof readServerConfig> | undefined;
+  let configs: ServerConfig[] = [];
   try {
-    config = readServerConfig(getConfigPath());
-    checks.push({ name: "Configuration", ok: true });
+    const configManager = new GuildConfigManager();
+    configManager.migrateLegacyConfig();
+    configs = configManager.list();
+    checks.push({
+      name: "Configuration",
+      ok: configs.length > 0,
+      message: configs.length > 0 ? `${configs.length} servidor(es) configurado(s).` : "No hay servidores configurados.",
+      action: configs.length > 0 ? undefined : "Run: npm run setup",
+    });
   } catch (error) {
     checks.push({
       name: "Configuration",
@@ -60,62 +68,64 @@ export async function runValidation(): Promise<Check[]> {
     });
   }
 
-  if (config?.rules.enabled) {
-    try {
-      loadRulesFile(config.rules.sourcePath);
-      checks.push({ name: "Rules file", ok: true });
-    } catch (error) {
+  for (const config of configs) {
+    if (config.rules.enabled) {
+      try {
+        loadRulesFile(config.rules.sourcePath);
+        checks.push({ name: `Rules file ${config.guildId}`, ok: true });
+      } catch (error) {
+        checks.push({
+          name: `Rules file ${config.guildId}`,
+          ok: false,
+          message: error instanceof Error ? error.message : "Archivo de reglas invalido.",
+          action: "Run: npm run setup",
+        });
+      }
+    }
+
+    if (isTheIsleGuideEnabled(config)) {
+      try {
+        loadConfiguredTheIsleGuideFile(config);
+        checks.push({ name: `The Isle guide file ${config.guildId}`, ok: true, message: resolveTheIsleGuidePath(config) });
+      } catch (error) {
+        checks.push({
+          name: `The Isle guide file ${config.guildId}`,
+          ok: false,
+          message: error instanceof Error ? error.message : "Archivo The Isle invalido.",
+          action: "Run: npm run setup",
+        });
+      }
+    }
+
+    if (config.modules.tiktokAlerts) {
+      try {
+        loadTikTokRuntimeConfig();
+        checks.push({ name: `TikTok credentials ${config.guildId}`, ok: true, message: "Client Secret: configurado" });
+      } catch (error) {
+        checks.push({
+          name: `TikTok credentials ${config.guildId}`,
+          ok: false,
+          message: error instanceof Error ? error.message : "Configuracion TikTok invalida.",
+          action: "Run: npm run setup",
+        });
+      }
+
       checks.push({
-        name: "Rules file",
-        ok: false,
-        message: error instanceof Error ? error.message : "Archivo de reglas invalido.",
+        name: `TikTok generalAlerts dependency ${config.guildId}`,
+        ok: config.modules.generalAlerts,
+        message: config.modules.generalAlerts ? undefined : "tiktokAlerts requiere generalAlerts activo.",
+        action: config.modules.generalAlerts ? undefined : "Run: npm run setup",
+      });
+      checks.push({
+        name: `TikTok general channel ${config.guildId}`,
+        ok: Boolean(config.channels.general?.id),
+        message: config.channels.general?.id ? undefined : "Falta config.channels.general.id.",
         action: "Run: npm run setup",
       });
     }
   }
 
-  if (config && isTheIsleGuideEnabled(config)) {
-    try {
-      loadConfiguredTheIsleGuideFile(config);
-      checks.push({ name: "The Isle guide file", ok: true, message: resolveTheIsleGuidePath(config) });
-    } catch (error) {
-      checks.push({
-        name: "The Isle guide file",
-        ok: false,
-        message: error instanceof Error ? error.message : "Archivo The Isle invalido.",
-        action: "Run: npm run setup",
-      });
-    }
-  }
-
-  if (config?.modules.tiktokAlerts) {
-    try {
-      loadTikTokRuntimeConfig();
-      checks.push({ name: "TikTok credentials", ok: true, message: "Client Secret: configurado" });
-    } catch (error) {
-      checks.push({
-        name: "TikTok credentials",
-        ok: false,
-        message: error instanceof Error ? error.message : "Configuracion TikTok invalida.",
-        action: "Run: npm run setup",
-      });
-    }
-
-    checks.push({
-      name: "TikTok generalAlerts dependency",
-      ok: config.modules.generalAlerts,
-      message: config.modules.generalAlerts ? undefined : "tiktokAlerts requiere generalAlerts activo.",
-      action: config.modules.generalAlerts ? undefined : "Run: npm run setup",
-    });
-    checks.push({
-      name: "TikTok general channel",
-      ok: Boolean(config.channels.general?.id),
-      message: config.channels.general?.id ? undefined : "Falta config.channels.general.id.",
-      action: "Run: npm run setup",
-    });
-  }
-
-  if (envParsed.success && config) {
+  if (envParsed.success && configs.length > 0) {
     const client = createDiscordClient();
     try {
       await client.login(envParsed.data.DISCORD_TOKEN);
@@ -124,51 +134,53 @@ export async function runValidation(): Promise<Check[]> {
       }
 
       checks.push({ name: "Discord token", ok: true });
-      const guild = await client.guilds.fetch(config.guildId);
-      checks.push({ name: "Guild", ok: true });
-      await guild.channels.fetch();
-      await guild.roles.fetch();
+      for (const config of configs) {
+        const guild = await client.guilds.fetch(config.guildId);
+        checks.push({ name: `Guild ${config.guildId}`, ok: true });
+        await guild.channels.fetch();
+        await guild.roles.fetch();
 
-      for (const [key, category] of Object.entries(config.categories)) {
-        const exists = category.id ? await guild.channels.fetch(category.id).catch(() => null) : null;
-        checks.push({
-          name: `Category ${key}`,
-          ok: Boolean(exists),
-          message: exists ? undefined : `Categoria ${category.id ?? category.name} no existe.`,
-          action: "Run: npm run setup",
-        });
-      }
-
-      for (const [key, channel] of Object.entries(config.channels)) {
-        const exists = channel.id ? await guild.channels.fetch(channel.id).catch(() => null) : null;
-        checks.push({
-          name: `Channel ${key}`,
-          ok: Boolean(exists),
-          message: exists ? undefined : `Canal ${channel.id ?? channel.name} no existe.`,
-          action: "Run: npm run setup",
-        });
-      }
-
-      for (const [key, role] of Object.entries(config.roles)) {
-        if (!role.enabled) {
-          continue;
+        for (const [key, category] of Object.entries(config.categories)) {
+          const exists = category.id ? await guild.channels.fetch(category.id).catch(() => null) : null;
+          checks.push({
+            name: `Category ${config.guildId}/${key}`,
+            ok: Boolean(exists),
+            message: exists ? undefined : `Categoria ${category.id ?? category.name} no existe.`,
+            action: "Run: npm run setup",
+          });
         }
-        const exists = role.id ? await guild.roles.fetch(role.id).catch(() => null) : null;
+
+        for (const [key, channel] of Object.entries(config.channels)) {
+          const exists = channel.id ? await guild.channels.fetch(channel.id).catch(() => null) : null;
+          checks.push({
+            name: `Channel ${config.guildId}/${key}`,
+            ok: Boolean(exists),
+            message: exists ? undefined : `Canal ${channel.id ?? channel.name} no existe.`,
+            action: "Run: npm run setup",
+          });
+        }
+
+        for (const [key, role] of Object.entries(config.roles)) {
+          if (!role.enabled) {
+            continue;
+          }
+          const exists = role.id ? await guild.roles.fetch(role.id).catch(() => null) : null;
+          checks.push({
+            name: `Role ${config.guildId}/${key}`,
+            ok: Boolean(exists),
+            message: exists ? undefined : `Rol ${role.id ?? role.name} no existe.`,
+            action: "Run: npm run setup",
+          });
+        }
+
+        const missing = await validateBotPermissions(guild, config);
         checks.push({
-          name: `Role ${key}`,
-          ok: Boolean(exists),
-          message: exists ? undefined : `Rol ${role.id ?? role.name} no existe.`,
-          action: "Run: npm run setup",
+          name: `Permissions ${config.guildId}`,
+          ok: missing.length === 0,
+          message: missing.map((permission) => permission.name).join(", "),
+          action: missing.length > 0 ? "Ajuste permisos del bot en Discord." : undefined,
         });
       }
-
-      const missing = await validateBotPermissions(guild, config);
-      checks.push({
-        name: "Permissions",
-        ok: missing.length === 0,
-        message: missing.map((permission) => permission.name).join(", "),
-        action: missing.length > 0 ? "Ajuste permisos del bot en Discord." : undefined,
-      });
     } catch (error) {
       checks.push({
         name: "Discord connectivity",

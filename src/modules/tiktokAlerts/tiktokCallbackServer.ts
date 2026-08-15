@@ -1,7 +1,7 @@
 import http, { type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Client } from "discord.js";
-import type { ServerConfig } from "../../core/config/schema.js";
+import type { GuildConfigManager } from "../../core/config/guildConfigManager.js";
 import type { TikTokRepository } from "../../repositories/tiktokRepository.js";
 import type { TikTokApiClient } from "./tiktokApiClient.js";
 import { completeTikTokOAuth } from "./tiktokAlertService.js";
@@ -12,7 +12,7 @@ export class TikTokCallbackServer {
 
   public constructor(
     private readonly client: Client,
-    private readonly config: ServerConfig,
+    private readonly configManager: GuildConfigManager,
     private readonly repository: TikTokRepository,
     private readonly api: TikTokApiClient,
     private readonly runtime: TikTokRuntimeConfig,
@@ -74,7 +74,13 @@ export class TikTokCallbackServer {
         return;
       }
 
-      await completeTikTokOAuth(this.client, this.config, this.repository, this.api, this.runtime, {
+      const oauthState = this.repository.findOAuthState(state);
+      if (!oauthState) {
+        sendHtml(response, 400, "State TikTok invalido.");
+        return;
+      }
+      const config = this.configManager.get(oauthState.guildId);
+      await completeTikTokOAuth(this.client, config, this.repository, this.api, this.runtime, {
         state,
         code,
       });

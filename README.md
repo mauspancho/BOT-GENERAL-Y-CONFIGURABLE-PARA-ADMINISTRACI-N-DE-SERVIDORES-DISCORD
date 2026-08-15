@@ -1,8 +1,6 @@
 # Discord Community Bot
 
-Bot general, configurable y modular para administrar comunidades Discord sin hardcodear nombres, IDs ni comportamientos especificos de un cliente.
-
-La V1 esta pensada para una instalacion por servidor Discord, pero la persistencia guarda `guild_id` para no bloquear soporte multi-guild futuro.
+Bot general, configurable y modular para administrar varias comunidades Discord en una sola instancia, sin hardcodear nombres, IDs ni comportamientos especificos de un cliente.
 
 ## Requisitos
 
@@ -30,9 +28,9 @@ npm install
 npm run setup
 ```
 
-El setup pedira token, Application/Client ID, seleccionara automaticamente el servidor donde esta el bot y permitira elegir instalacion rapida o personalizada.
+El setup pedira token, Application/Client ID, mostrara los servidores donde esta el bot y permitira agregar o modificar cada servidor de forma independiente.
 
-El token solo se guarda en `.env`. No se copia en backups normales, logs ni `config/server.json`.
+El token solo se guarda en `.env`. No se copia en backups normales, logs ni archivos de configuracion.
 
 ## Comandos Disponibles
 
@@ -54,7 +52,7 @@ npm test
 ## Configuracion
 
 - Secretos y datos de proceso: `.env`
-- Configuracion funcional: `config/server.json`
+- Configuracion funcional por servidor: `config/guilds/<guildId>.json`
 - Reglas normalizadas: `data/rules.md`
 - Base SQLite: `data/bot.sqlite`
 - Logs locales: `logs/app.log`
@@ -62,12 +60,14 @@ npm test
 
 Los IDs de categorias, canales y roles se guardan automaticamente cuando Discord devuelve los recursos creados o reutilizados.
 
+Si existe una instalacion anterior con `config/server.json`, el bot la migra de forma segura en el primer arranque o setup: lee su `guildId`, crea `config/guilds/<guildId>.json`, deja el original intacto y crea un backup `config/server.json.pre-multiguild-*.bak`.
+
 ## MVP Implementado
 
 - Proyecto TypeScript estricto.
 - Configuracion versionada con Zod.
 - CLI interactiva con instalacion rapida y personalizada.
-- Seleccion automatica de guild.
+- Administracion multi-guild con una configuracion por servidor.
 - Creacion o reutilizacion de categorias, canales y roles.
 - Captura automatica de IDs.
 - Validacion de permisos por modulo.
@@ -105,6 +105,8 @@ El modulo `generalAlerts` esta activo por defecto y usa siempre el canal logico 
 ## TikTok Alerts
 
 El modulo `tiktokAlerts` usa la API oficial de TikTok, no scraping. Requiere `generalAlerts` activo y publica siempre mediante `config.channels.general.id`; no crea canales nuevos.
+
+Las credenciales de la app TikTok Developer son globales en `.env`, pero cada guild tiene su propia conexion TikTok en SQLite mediante `guild_id`: `state` OAuth, `open_id`, access token, refresh token, videos publicados, polling y logs quedan aislados por servidor. El callback HTTP es unico para toda la instancia y resuelve el guild correcto usando el `state` recibido desde TikTok.
 
 Pasos de configuracion:
 
@@ -172,9 +174,9 @@ npm run validate
 npm run doctor -- --output diagnostic.json
 ```
 
-`validate` comprueba entorno, configuracion, reglas, SQLite, conexion Discord, guild, recursos configurados y permisos.
+`validate` comprueba entorno, configuraciones por guild, reglas, SQLite, conexion Discord, guilds, recursos configurados y permisos.
 
-`doctor` produce informacion segura para soporte tecnico: version de Node, version del bot, version de configuracion, guild, modulos, estado de DB, conectividad y permisos faltantes.
+`doctor` produce informacion segura para soporte tecnico: version de Node, version del bot, configuraciones por guild, modulos, estado de DB, conectividad y permisos faltantes.
 
 ## Docker
 
@@ -236,15 +238,3 @@ La V1 guarda solo datos necesarios:
 - auditoria local de cambios estructurales
 
 No almacena perfiles completos ni contenido de mensajes de usuarios.
-
-## Fase 2
-
-La arquitectura deja preparados estos modulos, pero no estan completos en V1:
-
-- self-roles avanzados
-- tickets
-- sugerencias
-- anuncios avanzados
-- moderacion ampliada
-- anti-raid
-- multi-guild en un solo proceso
