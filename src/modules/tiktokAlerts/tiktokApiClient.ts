@@ -3,6 +3,7 @@ import type {
   TikTokTokenResponse,
   TikTokUserInfo,
   TikTokVideo,
+  TikTokVideoPage,
 } from "./tiktokTypes.js";
 
 type Fetcher = typeof fetch;
@@ -78,32 +79,52 @@ export class TikTokApiClient {
   }
 
   public async listVideos(accessToken: string, maxCount = 20): Promise<TikTokVideo[]> {
+    return (await this.listVideosPage(accessToken, { maxCount })).videos;
+  }
+
+  public async listVideosPage(
+    accessToken: string,
+    options: { maxCount?: number; cursor?: number | undefined } = {},
+  ): Promise<TikTokVideoPage> {
     const url = new URL("https://open.tiktokapis.com/v2/video/list/");
     url.searchParams.set("fields", "id,title,video_description,share_url,cover_image_url,create_time");
+    const body: Record<string, number> = { max_count: options.maxCount ?? 20 };
+    if (options.cursor !== undefined) {
+      body.cursor = options.cursor;
+    }
     const json = await this.requestJson(url.toString(), {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ max_count: maxCount }),
+      body: JSON.stringify(body),
     });
-    const videos = asRecord(asRecord(json).data).videos;
+    const data = asRecord(asRecord(json).data);
+    const videos = data.videos;
     if (!Array.isArray(videos)) {
-      return [];
+      return {
+        videos: [],
+        cursor: readOptionalNumber(data, "cursor"),
+        hasMore: readOptionalBoolean(data, "has_more") ?? false,
+      };
     }
 
-    return videos.map((entry) => {
-      const record = asRecord(entry);
-      return {
-        id: readString(record, "id"),
-        title: readOptionalString(record, "title"),
-        videoDescription: readOptionalString(record, "video_description"),
-        shareUrl: readOptionalString(record, "share_url"),
-        coverImageUrl: readOptionalString(record, "cover_image_url"),
-        createTime: readOptionalNumber(record, "create_time"),
-      };
-    });
+    return {
+      videos: videos.map((entry) => {
+        const record = asRecord(entry);
+        return {
+          id: readString(record, "id"),
+          title: readOptionalString(record, "title"),
+          videoDescription: readOptionalString(record, "video_description"),
+          shareUrl: readOptionalString(record, "share_url"),
+          coverImageUrl: readOptionalString(record, "cover_image_url"),
+          createTime: readOptionalNumber(record, "create_time"),
+        };
+      }),
+      cursor: readOptionalNumber(data, "cursor"),
+      hasMore: readOptionalBoolean(data, "has_more") ?? false,
+    };
   }
 
   private async postToken(values: Record<string, string>): Promise<TikTokTokenResponse> {
@@ -168,4 +189,9 @@ function readNumber(record: Record<string, unknown>, key: string): number {
 function readOptionalNumber(record: Record<string, unknown>, key: string): number | undefined {
   const value = record[key];
   return typeof value === "number" ? value : undefined;
+}
+
+function readOptionalBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
+  const value = record[key];
+  return typeof value === "boolean" ? value : undefined;
 }

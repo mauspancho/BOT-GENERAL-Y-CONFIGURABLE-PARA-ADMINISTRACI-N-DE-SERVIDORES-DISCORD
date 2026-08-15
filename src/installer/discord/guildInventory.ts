@@ -1,11 +1,16 @@
+import fs from "node:fs";
+import path from "node:path";
 import { ChannelType, type Guild, type GuildBasedChannel, type Role } from "discord.js";
+import { getGuildDataDir } from "../../core/config/paths.js";
 import type { ChannelConfig, LogicalChannelFunction, RoleConfig, ServerConfig } from "../../core/config/schema.js";
 import type { StructureConfig } from "../wizard/installationPlan.js";
+import { toSupportedChannelType } from "./channelCompatibility.js";
 
 export interface InventoryCategory {
   id: string;
   name: string;
   normalizedName: string;
+  type: "category";
   position?: number | undefined;
 }
 
@@ -13,7 +18,8 @@ export interface InventoryChannel {
   id: string;
   name: string;
   normalizedName: string;
-  type: ChannelConfig["type"] | "category";
+  type: ChannelConfig["type"] | "unsupported";
+  discordType: number;
   parentId?: string | undefined;
   position?: number | undefined;
 }
@@ -22,10 +28,12 @@ export interface InventoryRole {
   id: string;
   name: string;
   normalizedName: string;
+  type: "role";
   position?: number | undefined;
 }
 
 export interface GuildInventory {
+  schemaVersion: 1;
   guildId: string;
   lastScannedAt: string;
   categories: InventoryCategory[];
@@ -64,6 +72,7 @@ const roleAliases: Record<string, string[]> = {
 export function scanGuildInventory(guild: Guild, now = new Date()): GuildInventory {
   const channels = [...guild.channels.cache.values()];
   return {
+    schemaVersion: 1,
     guildId: guild.id,
     lastScannedAt: now.toISOString(),
     categories: channels
@@ -72,6 +81,7 @@ export function scanGuildInventory(guild: Guild, now = new Date()): GuildInvento
         id: channel.id,
         name: channel.name,
         normalizedName: normalizeDiscordResourceName(channel.name),
+        type: "category",
         position: readPosition(channel),
       })),
     channels: channels
@@ -81,6 +91,7 @@ export function scanGuildInventory(guild: Guild, now = new Date()): GuildInvento
         name: channel.name,
         normalizedName: normalizeDiscordResourceName(channel.name),
         type: toInventoryChannelType(channel),
+        discordType: channel.type,
         parentId: "parentId" in channel ? channel.parentId ?? undefined : undefined,
         position: readPosition(channel),
       })),
@@ -90,9 +101,28 @@ export function scanGuildInventory(guild: Guild, now = new Date()): GuildInvento
         id: role.id,
         name: role.name,
         normalizedName: normalizeDiscordResourceName(role.name),
+        type: "role",
         position: readRolePosition(role),
       })),
   };
+}
+
+export function scanAndPersistGuildInventory(guild: Guild, now = new Date()): GuildInventory {
+  const inventory = scanGuildInventory(guild, now);
+  writeGuildInventorySnapshot(inventory);
+  return inventory;
+}
+
+export function getGuildInventorySnapshotPath(guildId: string): string {
+  return path.join(getGuildDataDir(guildId), "discord-inventory.json");
+}
+
+export function writeGuildInventorySnapshot(inventory: GuildInventory): void {
+  const targetPath = getGuildInventorySnapshotPath(inventory.guildId);
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  const tempPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tempPath, `${JSON.stringify(inventory, null, 2)}\n`, "utf8");
+  fs.renameSync(tempPath, targetPath);
 }
 
 export function normalizeDiscordResourceName(value: string): string {
@@ -111,13 +141,22 @@ export function findChannelCandidates(
   key: string,
   channel: ChannelConfig,
 ): ResourceMatch<InventoryChannel> {
-  const wantedType = channel.type === "announcement" ? ["announcement", "text"] : [channel.type];
-  const aliases = channel.function === "custom" ? [channel.name] : logicalChannelAliases[channel.function];
-  const normalizedAliases = new Set([key, channel.name, ...aliases].map(normalizeDiscordResourceName));
-  const matches = inventory.channels.filter(
-    (candidate) => wantedType.includes(candidate.type) && normalizedAliases.has(candidate.normalizedName),
-  );
-  return classifyMatches(matches);
+  const compatible = inventory.channels.filter((candidate) => isCompatibleType(candidate, channel));
+  const levels = [
+    [channel.name],
+    [key],
+    channel.function === "custom" ? [] : logicalChannelAliases[channel.function],
+  ];
+
+  for (const level of levels) {
+    const normalized = new Set(level.map(normalizeDiscordResourceName));
+    const matches = compatible.filter((candidate) => normalized.has(candidate.normalizedName));
+    if (matches.length > 0) {
+      return classifyMatches(matches);
+    }
+  }
+
+  return { status: "none", candidates: [] };
 }
 
 export function findCategoryCandidates(
@@ -147,6 +186,10 @@ export function applyInventoryToConfig(
   const reused: string[] = [];
   const ambiguous: string[] = [];
   const missing: string[] = [];
+
+  if (config.guildId !== inventory.guildId) {
+    throw new Error(`El inventario ${inventory.guildId} no pertenece al servidor configurado ${config.guildId}.`);
+  }
 
   for (const [key, category] of Object.entries(config.categories)) {
     if (category.id && inventory.categories.some((candidate) => candidate.id === category.id)) {
@@ -236,10 +279,11 @@ function classifyMatches<T>(matches: T[]): ResourceMatch<T> {
   return { status: "ambiguous", candidates: matches };
 }
 
+export function isCompatibleInventoryChannel(candidate: InventoryChannel, channel: ChannelConfig): boolean {
+  return isCompatibleType(candidate, channel);
+}
+
 function isCompatibleType(candidate: InventoryChannel, channel: ChannelConfig): boolean {
-  if (channel.type === "announcement") {
-    return candidate.type === "announcement" || candidate.type === "text";
-  }
   return candidate.type === channel.type;
 }
 
@@ -266,16 +310,7 @@ function categoryKeyForParent(
 }
 
 function toInventoryChannelType(channel: GuildBasedChannel): InventoryChannel["type"] {
-  if (channel.type === ChannelType.GuildCategory) {
-    return "category";
-  }
-  if (channel.type === ChannelType.GuildVoice) {
-    return "voice";
-  }
-  if (channel.type === ChannelType.GuildAnnouncement) {
-    return "announcement";
-  }
-  return "text";
+  return toSupportedChannelType(channel) ?? "unsupported";
 }
 
 function readPosition(channel: GuildBasedChannel): number | undefined {

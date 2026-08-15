@@ -1,6 +1,6 @@
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
 import { ChannelType } from "discord.js";
-import type { Guild } from "discord.js";
+import type { Guild, GuildBasedChannel } from "discord.js";
 import {
   CONFIG_VERSION,
   createDefaultModules,
@@ -9,7 +9,8 @@ import {
   type ServerConfig,
 } from "../../core/config/schema.js";
 import { listReusableChannels, listReusableRoles, makeRole } from "../discord/setupDiscord.js";
-import { applyInventoryToConfig, scanGuildInventory } from "../discord/guildInventory.js";
+import { isCompatibleReusableChannel } from "../discord/channelCompatibility.js";
+import { applyInventoryToConfig, scanAndPersistGuildInventory } from "../discord/guildInventory.js";
 import { buildCustomInstallationStructure } from "./categoryWizard.js";
 import { configureRules } from "./rulesWizard.js";
 import { ensureAutomaticInfrastructure, type StructureConfig } from "./installationPlan.js";
@@ -155,7 +156,7 @@ async function quickConfig(
 
   const config = createQuickInstallConfig(guild.id, communityName, modules, promptValues);
   ensureAutomaticInfrastructure(config);
-  const inventoryResult = applyInventoryToConfig(config, scanGuildInventory(guild));
+  const inventoryResult = applyInventoryToConfig(config, scanAndPersistGuildInventory(guild));
   printInventorySummary(inventoryResult);
 
   await maybeReuseResources(guild, config);
@@ -481,9 +482,7 @@ async function maybeReuseResources(guild: Guild, config: Omit<ServerConfig, "wel
       ],
     });
     if (mode === "existing") {
-      const channels = listReusableChannels(guild).filter(
-        (channelOption) => channelOption.type !== ChannelType.GuildCategory,
-      );
+      const channels = compatibleReusableChannelsForConfig(guild, channel);
       const selected = await select({
         message: "Seleccione canal:",
         choices: channels.map((channelOption) => ({ name: `#${channelOption.name}`, value: channelOption.id })),
@@ -531,4 +530,10 @@ function printInventorySummary(result: ReturnType<typeof applyInventoryToConfig>
   for (const ambiguous of result.ambiguous) {
     console.log(`Coincidencia ambigua, requiere seleccion manual: ${ambiguous}`);
   }
+}
+
+export function compatibleReusableChannelsForConfig(guild: Guild, channel: ChannelConfig): GuildBasedChannel[] {
+  return listReusableChannels(guild).filter((channelOption) =>
+    isCompatibleReusableChannel(guild, channelOption, channel.type),
+  );
 }

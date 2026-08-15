@@ -83,7 +83,7 @@ client.on("interactionCreate", (interaction) => {
     return;
   }
 
-  void handleInteractionCreate(interaction, config, database).catch((error: unknown) => {
+  void handleInteractionCreate(interaction, config, database, logger).catch((error: unknown) => {
     logger.error({ error, guildId }, "interactionCreate handler failed");
   });
 });

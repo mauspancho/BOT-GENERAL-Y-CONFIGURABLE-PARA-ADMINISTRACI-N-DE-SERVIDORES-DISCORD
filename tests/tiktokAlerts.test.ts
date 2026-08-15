@@ -25,16 +25,19 @@ import { TikTokCallbackServer } from "../src/modules/tiktokAlerts/tiktokCallback
 import {
   TIKTOK_CONNECT_CANCEL_PREFIX,
   TIKTOK_CONNECT_CONFIRM_PREFIX,
+  TIKTOK_REPUBLISH_NEXT_PREFIX,
+  TIKTOK_REPUBLISH_PREVIOUS_PREFIX,
   TIKTOK_REPUBLISH_SELECT_PREFIX,
 } from "../src/modules/tiktokAlerts/tiktokCustomIds.js";
 import { decryptTikTokToken } from "../src/modules/tiktokAlerts/tiktokCrypto.js";
 import {
+  handleTikTokButton,
   handleTikTokPendingDmButton,
   handleTikTokRepublishSelect,
   isTikTokPendingButton,
 } from "../src/modules/tiktokAlerts/tiktokInteractionService.js";
 import { createTikTokRepublishSession } from "../src/modules/tiktokAlerts/tiktokRepublishState.js";
-import type { TikTokRuntimeConfig, TikTokTokenResponse, TikTokUserInfo, TikTokVideo } from "../src/modules/tiktokAlerts/tiktokTypes.js";
+import type { TikTokRuntimeConfig, TikTokTokenResponse, TikTokUserInfo, TikTokVideo, TikTokVideoPage } from "../src/modules/tiktokAlerts/tiktokTypes.js";
 import { TikTokRepository } from "../src/repositories/tiktokRepository.js";
 import { makeGuildMock } from "./support/discordMocks.js";
 
@@ -478,19 +481,22 @@ describe("tiktok alerts", () => {
       if (endpoint.includes("/user/info/")) {
         return Promise.resolve(jsonResponse({ data: { user: { open_id: "open-id", display_name: "Cuenta", avatar_url: "avatar" } } }));
       }
-      return Promise.resolve(jsonResponse({ data: { videos: [video("api-video", 1_000)] } }));
+      return Promise.resolve(jsonResponse({ data: { videos: [video("api-video", 1_000)], cursor: 20, has_more: true } }));
     }) as unknown as typeof fetch;
     const api = new TikTokApiClient(runtime(), fetcher);
 
     await api.exchangeCode("code");
     await api.getUserInfo("access-api");
-    await api.listVideos("access-api");
+    const page = await api.listVideosPage("access-api", { maxCount: 20, cursor: 10 });
 
     expect(calls[0]?.url).toBe("https://open.tiktokapis.com/v2/oauth/token/");
     expect(stringifyBody(calls[0]?.init.body)).toContain("grant_type=authorization_code");
     expect(calls[1]?.url).toContain("https://open.tiktokapis.com/v2/user/info/");
     expect(calls[2]?.url).toContain("https://open.tiktokapis.com/v2/video/list/");
     expect(calls[2]?.init.method).toBe("POST");
+    expect(stringifyBody(calls[2]?.init.body)).toContain('"cursor":10');
+    expect(page.cursor).toBe(20);
+    expect(page.hasMore).toBe(true);
   });
 
   it("refreshes token and persists rotated refresh_token", async () => {
@@ -682,7 +688,7 @@ describe("tiktok alerts", () => {
     const repository = await connectedRepository(database);
     keepConnectionFresh(repository);
     stubTikTokEnv();
-    vi.spyOn(TikTokApiClient.prototype, "listVideos").mockResolvedValueOnce([video("old", 3_000)]);
+    vi.spyOn(TikTokApiClient.prototype, "listVideosPage").mockResolvedValueOnce({ videos: [video("old", 3_000)], hasMore: false });
     const interaction = makeInteraction("republicar", { isAdministrator: true });
 
     await tiktokCommand.execute(interaction as never, { config: makeConfig(true), database });
@@ -700,12 +706,78 @@ describe("tiktok alerts", () => {
     stubTikTokEnv();
     const interaction = makeInteraction("republicar", { isAdministrator: true });
     const apiVideos = Array.from({ length: 30 }, (_, index) => video(`video-${index}`, 3_000 + index));
-    vi.spyOn(TikTokApiClient.prototype, "listVideos").mockResolvedValueOnce(apiVideos);
+    vi.spyOn(TikTokApiClient.prototype, "listVideosPage").mockResolvedValueOnce({ videos: apiVideos, hasMore: true, cursor: 123 });
 
     await tiktokCommand.execute(interaction as never, { config: makeConfig(true), database });
 
     expect(repository.findConnection("guild")).toBeDefined();
     expect(JSON.stringify(firstReply(interaction).components)).not.toContain("video-25");
+    database.close();
+  });
+
+  it("/tiktok republicar paginates next and previous without changing sessions across users", async () => {
+    const database = await openMemoryDatabase();
+    const repository = await connectedRepository(database);
+    keepConnectionFresh(repository);
+    const config = makeConfig(true);
+    const session = createTikTokRepublishSession({
+      guildId: "guild",
+      discordUserId: "admin",
+      displayName: "CuentaTikTok",
+      page: { videos: [video("page-1", 3_000)], hasMore: true, cursor: 50 },
+    });
+    const api = makeApi({ pages: [{ videos: [video("page-2", 3_100)], hasMore: false }] });
+    const nextInteraction = makeRepublishButtonInteraction(`${TIKTOK_REPUBLISH_NEXT_PREFIX}${session.id}`, {
+      userId: "admin",
+      guildId: "guild",
+      isAdministrator: true,
+    });
+
+    await handleTikTokButton(nextInteraction as never, config, database, { runtime: runtime(), api });
+
+    expect(JSON.stringify(firstUpdate(nextInteraction))).toContain("page-2");
+    const blockedInteraction = makeRepublishButtonInteraction(`${TIKTOK_REPUBLISH_NEXT_PREFIX}${session.id}`, {
+      userId: "other",
+      guildId: "guild",
+      isAdministrator: true,
+    });
+
+    await handleTikTokButton(blockedInteraction as never, config, database, { runtime: runtime(), api });
+
+    expect(firstButtonReply(blockedInteraction).content).toContain("otro servidor o administrador");
+    const previousInteraction = makeRepublishButtonInteraction(`${TIKTOK_REPUBLISH_PREVIOUS_PREFIX}${session.id}`, {
+      userId: "admin",
+      guildId: "guild",
+      isAdministrator: true,
+    });
+
+    await handleTikTokButton(previousInteraction as never, config, database, { runtime: runtime(), api });
+
+    expect(JSON.stringify(firstUpdate(previousInteraction))).toContain("page-1");
+    database.close();
+  });
+
+  it("/tiktok republicar pagination cannot be used from another guild", async () => {
+    const database = await openMemoryDatabase();
+    const config = makeConfig(true);
+    config.guildId = "other-guild";
+    const session = createTikTokRepublishSession({
+      guildId: "guild",
+      discordUserId: "admin",
+      page: { videos: [video("page-1", 3_000)], hasMore: true, cursor: 50 },
+    });
+    const interaction = makeRepublishButtonInteraction(`${TIKTOK_REPUBLISH_NEXT_PREFIX}${session.id}`, {
+      userId: "admin",
+      guildId: "other-guild",
+      isAdministrator: true,
+    });
+
+    await handleTikTokButton(interaction as never, config, database, {
+      runtime: runtime(),
+      api: makeApi({ pages: [{ videos: [video("page-2", 3_100)], hasMore: false }] }),
+    });
+
+    expect(firstButtonReply(interaction).content).toContain("otro servidor");
     database.close();
   });
 
@@ -726,7 +798,10 @@ describe("tiktok alerts", () => {
 
     expect(selectInteraction.client.generalSend).toHaveBeenCalled();
     expect(firstAlertPayload(selectInteraction.client).content).toBe("@here");
-    expect(JSON.stringify(firstAlertPayload(selectInteraction.client))).toContain("Republicar descripcion");
+    const alertPayload = JSON.stringify(firstAlertPayload(selectInteraction.client));
+    expect(alertPayload).toContain("Republicar descripcion");
+    expect(alertPayload).toContain("vuelve a compartir uno de sus videos");
+    expect(alertPayload).not.toContain("acaba de publicar un nuevo video");
     expect(repository.hasPublishedVideo("guild", "open-id", "already")).toBe(true);
     const afterRepublish = repository.findConnection("guild");
     expect(afterRepublish?.lastVideoId).toBe("already");
@@ -833,6 +908,30 @@ describe("tiktok alerts", () => {
     database.close();
   });
 
+  it("republish send failure is logged safely and replies with a generic message", async () => {
+    const database = await openMemoryDatabase();
+    await connectedRepository(database);
+    const config = makeConfig(true);
+    const selectInteraction = makeSelectInteraction(createRepublishCustomId("guild", "admin", [video("old", 3_000)]), "old", {
+      userId: "admin",
+      guildId: "guild",
+      isAdministrator: true,
+    });
+    selectInteraction.client.generalSend.mockRejectedValueOnce(new Error("send failed access_token_123456789012345678901234567890"));
+    const logger = { error: vi.fn() };
+
+    await handleTikTokRepublishSelect(selectInteraction as never, config, database, {
+      runtime: runtime(),
+      api: makeApi({ videos: [video("old", 3_000)] }),
+      logger: logger as never,
+    });
+
+    expect(firstButtonReply(selectInteraction).content).toBe("No se pudo republicar el video TikTok en este momento.");
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain("access_token_123456789012345678901234567890");
+    expect(JSON.stringify(logger.error.mock.calls)).toContain("[REDACTED]");
+    database.close();
+  });
+
   it("preflight rejects tiktokAlerts without generalAlerts", () => {
     const config = makeConfig(true);
     config.modules.generalAlerts = false;
@@ -888,7 +987,9 @@ function makeApi(values: {
   refresh?: TikTokTokenResponse;
   userInfo?: TikTokUserInfo;
   videos?: TikTokVideo[];
+  pages?: TikTokVideoPage[];
 } = {}): TikTokApiClient {
+  const pages = [...(values.pages ?? [])];
   return {
     buildAuthorizeUrl: (state: string) => `https://www.tiktok.com/v2/auth/authorize/?state=${state}`,
     exchangeCode: vi.fn(() => Promise.resolve(values.exchange ?? token("access-1", "refresh-1"))),
@@ -896,6 +997,7 @@ function makeApi(values: {
     revokeToken: vi.fn(() => Promise.resolve()),
     getUserInfo: vi.fn(() => Promise.resolve(values.userInfo ?? user())),
     listVideos: vi.fn(() => Promise.resolve(values.videos ?? [])),
+    listVideosPage: vi.fn(() => Promise.resolve(pages.shift() ?? { videos: values.videos ?? [], hasMore: false })),
   } as unknown as TikTokApiClient;
 }
 
@@ -1149,12 +1251,38 @@ function firstButtonReply(interaction: {
   return payload;
 }
 
-function firstUpdate(interaction: ReturnType<typeof makeButtonInteraction>): { content: string; components: unknown[] } {
+function firstUpdate(interaction: {
+  update: { mock: { calls: Array<Array<{ content: string; components: unknown[] }>> } };
+}): { content: string; components: unknown[] } {
   const payload = interaction.update.mock.calls[0]?.[0];
   if (!payload) {
     throw new Error("No button update.");
   }
   return payload;
+}
+
+function makeRepublishButtonInteraction(
+  customId: string,
+  options: { userId: string; guildId: string; isAdministrator: boolean },
+) {
+  const reply = vi.fn((payload: { content: string; ephemeral: boolean }) => {
+    void payload;
+    return Promise.resolve();
+  });
+  const update = vi.fn((payload: { content: string; components: unknown[] }) => {
+    void payload;
+    return Promise.resolve();
+  });
+  return {
+    customId,
+    guildId: options.guildId,
+    user: { id: options.userId },
+    memberPermissions: {
+      has: (permission: bigint) => options.isAdministrator && permission === PermissionFlagsBits.Administrator,
+    },
+    reply,
+    update,
+  };
 }
 
 function makeInteraction(subcommand: string, options: {

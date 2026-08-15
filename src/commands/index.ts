@@ -1,6 +1,7 @@
 import type { ChatInputCommandInteraction } from "discord.js";
 import type { ServerConfig } from "../core/config/schema.js";
 import type { Database } from "../core/database/sqlite.js";
+import type { AppLogger } from "../core/logger/logger.js";
 import { alertCommand } from "./alert.js";
 import { botStatusCommand } from "./botStatus.js";
 import { configStatusCommand } from "./configStatus.js";
@@ -26,6 +27,7 @@ export async function handleSlashCommand(
   interaction: ChatInputCommandInteraction,
   config: ServerConfig,
   database: Database,
+  logger?: AppLogger,
 ): Promise<void> {
   const command = enabledCommands(config).find((candidate) => candidate.name === interaction.commandName);
   if (!command) {
@@ -33,5 +35,5 @@ export async function handleSlashCommand(
     return;
   }
 
-  await command.execute(interaction, { config, database });
+  await command.execute(interaction, { config, database, logger });
 }

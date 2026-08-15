@@ -103,6 +103,17 @@ export function voiceChannel(
   };
 }
 
+export function forumChannel(id: string, name: string, parentId?: string): Record<string, unknown> {
+  return {
+    id,
+    name,
+    parentId,
+    type: ChannelType.GuildForum,
+    isThread: () => false,
+    delete: vi.fn(() => Promise.resolve()),
+  };
+}
+
 export function role(id: string, name: string): Record<string, unknown> {
   return {
     id,

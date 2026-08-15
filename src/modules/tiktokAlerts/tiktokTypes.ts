@@ -75,6 +75,12 @@ export interface TikTokVideo {
   createTime?: number | undefined;
 }
 
+export interface TikTokVideoPage {
+  videos: TikTokVideo[];
+  cursor?: number | undefined;
+  hasMore: boolean;
+}
+
 export interface TikTokAlertOptions {
   mention: GeneralAlertMention;
   manualTest?: boolean;

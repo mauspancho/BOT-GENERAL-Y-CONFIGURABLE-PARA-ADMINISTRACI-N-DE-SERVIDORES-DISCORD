@@ -1,13 +1,18 @@
+import fs from "node:fs";
 import { describe, expect, it, type vi } from "vitest";
 import { createDefaultModules, type ServerConfig } from "../src/core/config/schema.js";
+import { compatibleReusableChannelsForConfig } from "../src/installer/wizard/configFactory.js";
 import {
   applyInventoryToConfig,
   findChannelCandidates,
+  getGuildInventorySnapshotPath,
   normalizeDiscordResourceName,
+  scanAndPersistGuildInventory,
   scanGuildInventory,
+  type GuildInventory,
 } from "../src/installer/discord/guildInventory.js";
 import { applyStructurePlan, rollbackCreatedResources } from "../src/installer/discord/setupDiscord.js";
-import { category, makeGuildMock, role, textChannel, voiceChannel } from "./support/discordMocks.js";
+import { category, forumChannel, makeGuildMock, role, textChannel, voiceChannel } from "./support/discordMocks.js";
 
 describe("guild inventory reuse", () => {
   it("reuses existing #general and does not create another general", async () => {
@@ -51,6 +56,44 @@ describe("guild inventory reuse", () => {
     expect(config.channels.general?.id).toBeUndefined();
   });
 
+  it("manual channel selector only offers compatible text channels", () => {
+    const config = configFor("guild");
+    const guild = makeGuildMock({
+      features: [],
+      channels: [voiceChannel("voice-general", "general"), textChannel("text-chat", "chat-general")],
+    });
+
+    const channels = compatibleReusableChannelsForConfig(guild, config.channels.general!);
+
+    expect(channels.map((channel) => channel.id)).toEqual(["text-chat"]);
+  });
+
+  it("does not reuse a forum channel called general as text general", () => {
+    const config = configFor("guild");
+    const inventory = scanGuildInventory(makeGuildMock({
+      features: [],
+      channels: [forumChannel("forum-id", "general")],
+    }));
+
+    const result = applyInventoryToConfig(config, inventory);
+
+    expect(inventory.channels[0]?.type).toBe("unsupported");
+    expect(result.missing).toContain("channel:general");
+    expect(config.channels.general?.id).toBeUndefined();
+  });
+
+  it("exact configured channel name wins over lower priority aliases", () => {
+    const config = configFor("guild");
+    const inventory = scanGuildInventory(makeGuildMock({
+      features: [],
+      channels: [textChannel("alias-id", "chat"), textChannel("exact-id", "general")],
+    }));
+
+    applyInventoryToConfig(config, inventory);
+
+    expect(config.channels.general?.id).toBe("exact-id");
+  });
+
   it("does not choose arbitrary channel when matches are ambiguous", () => {
     const config = configFor("guild");
     const inventory = scanGuildInventory(makeGuildMock({
@@ -62,6 +105,18 @@ describe("guild inventory reuse", () => {
 
     expect(result.ambiguous).toContain("channel:general");
     expect(config.channels.general?.id).toBeUndefined();
+  });
+
+  it("two exact normalized channel matches are ambiguous", () => {
+    const config = configFor("guild");
+    const inventory = scanGuildInventory(makeGuildMock({
+      features: [],
+      channels: [textChannel("general-1", "general"), textChannel("general-2", "💬・general")],
+    }));
+
+    const result = findChannelCandidates(inventory, "general", config.channels.general!);
+
+    expect(result.status).toBe("ambiguous");
   });
 
   it("reuses existing INFORMACION category", () => {
@@ -164,6 +219,40 @@ describe("guild inventory reuse", () => {
 
     expect(chepe.channels.general?.id).toBe("chepe-general");
     expect(maus.channels.general?.id).toBe("maus-general");
+  });
+
+  it("rejects inventory from another guild without applying IDs", () => {
+    const config = configFor("guild-b");
+    const inventory = scanGuildInventory(makeGuildMock({
+      id: "guild-a",
+      features: [],
+      channels: [textChannel("a-general", "general")],
+    }));
+
+    expect(() => applyInventoryToConfig(config, inventory)).toThrow(/no pertenece/);
+    expect(config.channels.general?.id).toBeUndefined();
+  });
+
+  it("persists a separated guild inventory snapshot", () => {
+    const guildId = "guild-snapshot-test";
+    const snapshotPath = getGuildInventorySnapshotPath(guildId);
+    fs.rmSync(snapshotPath, { force: true });
+    const guild = makeGuildMock({
+      id: guildId,
+      features: [],
+      channels: [category("cat-id", "INFO"), textChannel("general-id", "general", "cat-id")],
+      roles: [role("member-id", "Miembro")],
+    });
+
+    scanAndPersistGuildInventory(guild, new Date("2026-08-15T00:00:00.000Z"));
+    const snapshot = JSON.parse(fs.readFileSync(snapshotPath, "utf8")) as GuildInventory;
+
+    expect(snapshot.schemaVersion).toBe(1);
+    expect(snapshot.guildId).toBe(guildId);
+    expect(snapshot.channels[0]?.parentId).toBe("cat-id");
+    expect(snapshot.roles[0]?.id).toBe("member-id");
+
+    fs.rmSync(snapshotPath, { force: true });
   });
 });
 

@@ -377,7 +377,9 @@ async function publishTikTokVideo(
     type: "informacion",
     title: options.manualRepublish ? "TikTok republicado" : options.manualTest ? "TikTok prueba manual" : "Nuevo video en TikTok",
     message: [
-      `${connection.displayName} acaba de publicar un nuevo video.`,
+      options.manualRepublish
+        ? `${connection.displayName} vuelve a compartir uno de sus videos.`
+        : `${connection.displayName} acaba de publicar un nuevo video.`,
       "",
       description,
       ...(video.shareUrl ? ["", `Ver video:\n${video.shareUrl}`] : []),

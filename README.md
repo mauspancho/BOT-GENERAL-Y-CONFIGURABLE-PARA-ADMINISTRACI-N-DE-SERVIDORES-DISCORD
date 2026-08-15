@@ -32,7 +32,9 @@ El setup pedira token, Application/Client ID, mostrara los servidores donde esta
 
 El token solo se guarda en `.env`. No se copia en backups normales, logs ni archivos de configuracion.
 
-Durante la instalacion, el wizard escanea la estructura actual del servidor antes de crear recursos. Si encuentra categorias o canales compatibles por ID, nombre exacto normalizado o alias conocidos como `general`, `reglas`, `bienvenida`, `anuncios`, `roles` o `logs`, reutiliza esos recursos y guarda sus IDs. Si hay coincidencias ambiguas, no elige automaticamente: deja el recurso pendiente para decision explicita. El setup nunca mueve canales existentes de categoria de forma silenciosa ni duplica un canal que ya pudo reutilizar.
+Durante la instalacion, el wizard escanea la estructura actual del servidor antes de crear recursos. Si encuentra categorias, canales o roles compatibles por ID, nombre exacto normalizado o alias conocidos como `general`, `reglas`, `bienvenida`, `anuncios`, `roles` o `logs`, reutiliza esos recursos y guarda sus IDs. Si hay coincidencias ambiguas, no elige automaticamente: pide una decision explicita. El setup nunca mueve canales existentes de categoria de forma silenciosa ni duplica un canal que ya pudo reutilizar.
+
+Cada escaneo refresca un snapshot no sensible en `data/guilds/<guildId>/discord-inventory.json`. Ese archivo sirve para auditoria y diagnostico; Discord sigue siendo la fuente de verdad y el bot no usa snapshots antiguos para crear recursos automaticamente.
 
 ## Comandos Disponibles
 
@@ -124,7 +126,7 @@ Pasos de configuracion:
 10. Ejecuta `/tiktok prueba` para publicar una alerta manual usando el mismo pipeline del monitor.
 11. Usa `/tiktok republicar` si necesitas volver a publicar manualmente un video ya existente.
 
-`/tiktok republicar` muestra un menu efimero con los videos recientes de la cuenta conectada, limitado a 20 opciones. Solo el administrador que abrio el menu puede usarlo, dentro del mismo servidor. La republicacion manual puede volver a enviar un video ya publicado, pero no modifica el dedupe automatico, el baseline, `lastVideoId`, `lastCheckAt`, `lastSuccessAt` ni el estado del polling.
+`/tiktok republicar` muestra un menu efimero con los videos recientes de la cuenta conectada, limitado a 20 opciones por pagina, con botones `Anterior` y `Siguiente` cuando TikTok devuelve mas resultados. Solo el administrador que abrio el menu puede usarlo, dentro del mismo servidor. La republicacion manual puede volver a enviar un video ya publicado, pero no modifica el dedupe automatico, el baseline, `lastVideoId`, `lastCheckAt`, `lastSuccessAt` ni el estado del polling.
 
 Variables gestionadas en `.env`:
 

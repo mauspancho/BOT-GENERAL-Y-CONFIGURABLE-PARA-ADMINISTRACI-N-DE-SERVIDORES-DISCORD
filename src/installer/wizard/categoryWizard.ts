@@ -5,7 +5,14 @@ import { askChannelForCategory } from "./channelWizard.js";
 import { formatInstallationTree } from "../../utils/formatPlan.js";
 import { ensureAutomaticInfrastructure, ensureVerificationRoles } from "./installationPlan.js";
 import type { ServerConfig } from "../../core/config/schema.js";
-import { applyInventoryToConfig, scanGuildInventory } from "../discord/guildInventory.js";
+import {
+  applyInventoryToConfig,
+  findCategoryCandidates,
+  findChannelCandidates,
+  findRoleCandidates,
+  scanAndPersistGuildInventory,
+  type GuildInventory,
+} from "../discord/guildInventory.js";
 
 type CategoryAction = "create" | "existing" | "finish";
 
@@ -56,7 +63,9 @@ export async function buildCustomInstallationStructure(
     memberRole: await maybeAskRoleName(modules.rules, "Rol miembro:", "Miembro"),
   });
   ensureAutomaticInfrastructure(config);
-  applyInventoryToConfig(config, scanGuildInventory(guild));
+  const inventory = scanAndPersistGuildInventory(guild);
+  const inventoryResult = applyInventoryToConfig(config, inventory);
+  await resolveAmbiguousInventoryMatches(config, inventory, inventoryResult.ambiguous);
 
   return config;
 }
@@ -94,6 +103,87 @@ async function maybeAskRoleName(enabled: boolean, message: string, fallback: str
   }
 
   return input({ message, default: fallback });
+}
+
+async function resolveAmbiguousInventoryMatches(
+  config: StructureConfig,
+  inventory: GuildInventory,
+  ambiguous: string[],
+): Promise<void> {
+  for (const item of ambiguous) {
+    const [resourceType, key] = item.split(":");
+    if (!resourceType || !key) {
+      continue;
+    }
+
+    if (resourceType === "category") {
+      const category = config.categories[key];
+      if (!category) {
+        continue;
+      }
+      const match = findCategoryCandidates(inventory, key, category);
+      const selected = await select<string>({
+        message: `Coincidencia ambigua para categoria "${category.name}". Seleccione una opcion:`,
+        choices: [
+          ...match.candidates.map((candidate) => ({
+            name: `Usar ${candidate.name} (${candidate.id})`,
+            value: candidate.id,
+          })),
+          { name: "Crear nueva categoria", value: "create" },
+        ],
+      });
+      if (selected !== "create") {
+        const candidate = match.candidates.find((option) => option.id === selected);
+        config.categories[key] = { name: candidate?.name ?? category.name, id: selected };
+      }
+      continue;
+    }
+
+    if (resourceType === "channel") {
+      const channel = config.channels[key];
+      if (!channel) {
+        continue;
+      }
+      const match = findChannelCandidates(inventory, key, channel);
+      const selected = await select<string>({
+        message: `Coincidencia ambigua para canal "${channel.name}". Seleccione una opcion:`,
+        choices: [
+          ...match.candidates.map((candidate) => ({
+            name: `Usar #${candidate.name} (${candidate.id})`,
+            value: candidate.id,
+          })),
+          { name: "Crear nuevo canal", value: "create" },
+        ],
+      });
+      if (selected !== "create") {
+        const candidate = match.candidates.find((option) => option.id === selected);
+        config.channels[key] = { ...channel, name: candidate?.name ?? channel.name, id: selected };
+      }
+      continue;
+    }
+
+    if (resourceType === "role") {
+      const role = config.roles[key];
+      if (!role?.enabled) {
+        continue;
+      }
+      const match = findRoleCandidates(inventory, key, role);
+      const selected = await select<string>({
+        message: `Coincidencia ambigua para rol "${role.name}". Seleccione una opcion:`,
+        choices: [
+          ...match.candidates.map((candidate) => ({
+            name: `Usar ${candidate.name} (${candidate.id})`,
+            value: candidate.id,
+          })),
+          { name: "Crear nuevo rol", value: "create" },
+        ],
+      });
+      if (selected !== "create") {
+        const candidate = match.candidates.find((option) => option.id === selected);
+        config.roles[key] = { ...role, name: candidate?.name ?? role.name, id: selected };
+      }
+    }
+  }
 }
 
 function toPreviewConfig(config: StructureConfig): ServerConfig {

@@ -4,7 +4,6 @@ import {
   ButtonStyle,
   PermissionFlagsBits,
   SlashCommandBuilder,
-  StringSelectMenuBuilder,
 } from "discord.js";
 import type { SlashCommand } from "./commandTypes.js";
 import type { ServerConfig } from "../core/config/schema.js";
@@ -20,10 +19,9 @@ import { loadTikTokRuntimeConfig } from "../modules/tiktokAlerts/tiktokEnv.js";
 import {
   TIKTOK_DISCONNECT_CANCEL_PREFIX,
   TIKTOK_DISCONNECT_CONFIRM_PREFIX,
-  TIKTOK_REPUBLISH_SELECT_PREFIX,
 } from "../modules/tiktokAlerts/tiktokCustomIds.js";
 import { createTikTokRepublishSession } from "../modules/tiktokAlerts/tiktokRepublishState.js";
-import type { TikTokVideo } from "../modules/tiktokAlerts/tiktokTypes.js";
+import { buildTikTokRepublishMessage } from "../modules/tiktokAlerts/tiktokRepublishUi.js";
 
 export const tiktokCommand: SlashCommand = {
   name: "tiktok",
@@ -154,8 +152,8 @@ export const tiktokCommand: SlashCommand = {
         }
 
         const refreshed = await refreshTikTokConnectionIfNeeded(repository, api, runtime, connection);
-        const videos = await api.listVideos(refreshed.accessToken, 20);
-        if (videos.length === 0) {
+        const page = await api.listVideosPage(refreshed.accessToken, { maxCount: 20 });
+        if (page.videos.length === 0) {
           await interaction.reply({ content: "La cuenta TikTok no tiene videos disponibles.", ephemeral: true });
           return;
         }
@@ -163,22 +161,28 @@ export const tiktokCommand: SlashCommand = {
         const session = createTikTokRepublishSession({
           guildId: context.config.guildId,
           discordUserId: interaction.user.id,
-          videos,
+          displayName: connection.displayName,
+          page,
         });
-        const menu = new StringSelectMenuBuilder()
-          .setCustomId(`${TIKTOK_REPUBLISH_SELECT_PREFIX}${session.id}`)
-          .setPlaceholder(`Videos de ${connection.displayName}`)
-          .addOptions(videos.slice(0, 20).map(toRepublishOption));
-        const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu);
+        const message = buildTikTokRepublishMessage(session, page);
         await interaction.reply({
-          content: `Selecciona el video que deseas republicar de ${connection.displayName}.`,
-          components: [row],
+          ...message,
           ephemeral: true,
         });
       }
     } catch (error) {
+      if (subcommand === "republicar") {
+        context.logger?.error(
+          {
+            error: sanitizeTikTokCommandError(error),
+            guildId: context.config.guildId,
+            discordUserId: interaction.user.id,
+          },
+          "TikTok republish command failed",
+        );
+      }
       await interaction.reply({
-        content: error instanceof Error ? error.message : "TikTok no disponible.",
+        content: subcommand === "republicar" ? "No se pudo cargar la lista de videos TikTok." : error instanceof Error ? error.message : "TikTok no disponible.",
         ephemeral: true,
       });
     }
@@ -210,27 +214,24 @@ function formatTikTokStatus(
   ].join("\n");
 }
 
-function toRepublishOption(video: TikTokVideo): { label: string; description: string; value: string } {
-  const text = video.title ?? video.videoDescription ?? "Video TikTok";
-  const date = video.createTime ? new Date(video.createTime * 1000).toLocaleDateString("es-MX") : "sin fecha";
-  return {
-    label: trimDiscordOption(text, 100),
-    description: trimDiscordOption(`${date} - ID ${maskVideoId(video.id)}`, 100),
-    value: video.id,
-  };
-}
-
-function trimDiscordOption(value: string, maxLength: number): string {
-  return value.length <= maxLength ? value : `${value.slice(0, maxLength - 3)}...`;
-}
-
-function maskVideoId(videoId: string): string {
-  return videoId.length <= 8 ? videoId : `${videoId.slice(0, 4)}...${videoId.slice(-4)}`;
-}
-
 function maskOpenId(openId: string): string {
   if (openId.length <= 8) {
     return "********";
   }
   return `${openId.slice(0, 4)}...${openId.slice(-4)}`;
+}
+
+function sanitizeTikTokCommandError(error: unknown): { name?: string; message: string; stack?: string | undefined } {
+  if (!(error instanceof Error)) {
+    return { message: redactPotentialSecret(String(error)) };
+  }
+  return {
+    name: error.name,
+    message: redactPotentialSecret(error.message),
+    stack: error.stack ? redactPotentialSecret(error.stack) : undefined,
+  };
+}
+
+function redactPotentialSecret(value: string): string {
+  return value.replace(/[A-Za-z0-9_-]{24,}/g, "[REDACTED]");
 }

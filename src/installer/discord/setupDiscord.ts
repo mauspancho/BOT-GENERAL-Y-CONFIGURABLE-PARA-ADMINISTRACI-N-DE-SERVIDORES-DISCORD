@@ -13,6 +13,11 @@ import { InstallerError } from "../../core/errors/AppError.js";
 import { getMissingPermissions, getRequiredPermissions } from "../../core/permissions/requiredPermissions.js";
 import { ensureAutomaticInfrastructure } from "../wizard/installationPlan.js";
 import { isTheIsleGuideEnabled } from "../../modules/theIsleGuide/theIsleGuideConfig.js";
+import {
+  guildSupportsAnnouncementChannels,
+  isCompatibleDiscordChannel,
+  toDiscordChannelType,
+} from "./channelCompatibility.js";
 
 export interface StructureChange {
   action: "create" | "reuse" | "skip" | "repair";
@@ -234,19 +239,6 @@ export function listReusableRoles(guild: Guild): Role[] {
   return [...guild.roles.cache.values()].filter((role) => !role.managed && role.name !== "@everyone");
 }
 
-export function toDiscordChannelType(
-  type: ChannelConfig["type"],
-  allowAnnouncementChannels = true,
-): ChannelType.GuildText | ChannelType.GuildAnnouncement | ChannelType.GuildVoice {
-  if (type === "announcement") {
-    return allowAnnouncementChannels ? ChannelType.GuildAnnouncement : ChannelType.GuildText;
-  }
-  if (type === "voice") {
-    return ChannelType.GuildVoice;
-  }
-  return ChannelType.GuildText;
-}
-
 export function makeRole(name: string, enabled = true): RoleConfig {
   return { name, enabled, protected: true };
 }
@@ -282,10 +274,6 @@ export async function rollbackCreatedResources(
   }
 
   return reverted;
-}
-
-export function guildSupportsAnnouncementChannels(guild: Pick<Guild, "features">): boolean {
-  return guild.features.includes("COMMUNITY");
 }
 
 function validateStructureShape(config: ServerConfig, result: StructurePreflightResult): void {
@@ -447,5 +435,7 @@ function isExpectedChannelType(
   if (!expectedType) {
     return true;
   }
-  return channel.type === toDiscordChannelType(expectedType, allowAnnouncementChannels);
+  return isCompatibleDiscordChannel(channel, expectedType, allowAnnouncementChannels);
 }
+
+export { guildSupportsAnnouncementChannels, toDiscordChannelType };

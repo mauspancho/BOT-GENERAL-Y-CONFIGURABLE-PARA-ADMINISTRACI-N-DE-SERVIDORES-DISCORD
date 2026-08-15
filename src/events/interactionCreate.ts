@@ -1,6 +1,7 @@
 import type { Interaction } from "discord.js";
 import type { ServerConfig } from "../core/config/schema.js";
 import type { Database } from "../core/database/sqlite.js";
+import type { AppLogger } from "../core/logger/logger.js";
 import { RuleAcceptanceRepository } from "../repositories/ruleAcceptanceRepository.js";
 import {
   RULES_ACCEPT_CUSTOM_ID,
@@ -16,14 +17,15 @@ export async function handleInteractionCreate(
   interaction: Interaction,
   config: ServerConfig,
   database: Database,
+  logger?: AppLogger,
 ): Promise<void> {
   if (interaction.isChatInputCommand()) {
-    await handleSlashCommand(interaction, config, database);
+    await handleSlashCommand(interaction, config, database, logger);
     return;
   }
 
   if (interaction.isStringSelectMenu()) {
-    if (await handleTikTokRepublishSelect(interaction, config, database)) {
+    if (await handleTikTokRepublishSelect(interaction, config, database, logger ? { logger } : undefined)) {
       return;
     }
     if (await handleTheIsleSelect(interaction, config)) {
@@ -35,7 +37,7 @@ export async function handleInteractionCreate(
     return;
   }
 
-  if (await handleTikTokButton(interaction, config, database)) {
+  if (await handleTikTokButton(interaction, config, database, logger ? { logger } : undefined)) {
     return;
   }
 
