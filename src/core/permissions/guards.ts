@@ -1,4 +1,4 @@
-import { PermissionFlagsBits, type ButtonInteraction, type ChatInputCommandInteraction } from "discord.js";
+import { PermissionFlagsBits, type ButtonInteraction, type ChatInputCommandInteraction, type Client } from "discord.js";
 
 export async function requireAdministrator(interaction: ChatInputCommandInteraction | ButtonInteraction): Promise<boolean> {
   const memberPermissions = interaction.memberPermissions;
@@ -24,4 +24,14 @@ export async function requireManageGuild(interaction: ChatInputCommandInteractio
   }
 
   return true;
+}
+
+export async function requireGuildAdministratorForUser(
+  client: Client,
+  guildId: string,
+  discordUserId: string,
+): Promise<boolean> {
+  const guild = await client.guilds.fetch(guildId);
+  const member = await guild.members.fetch(discordUserId);
+  return member.permissions.has(PermissionFlagsBits.Administrator);
 }

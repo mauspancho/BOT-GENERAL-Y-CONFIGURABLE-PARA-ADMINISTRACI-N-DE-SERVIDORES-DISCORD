@@ -9,6 +9,7 @@ import { handleGuildMemberAdd } from "./events/guildMemberAdd.js";
 import { handleInteractionCreate } from "./events/interactionCreate.js";
 import { enabledModules } from "./modules/index.js";
 import { TikTokMultiGuildRuntime } from "./modules/tiktokAlerts/tiktokAlertsModule.js";
+import { handleTikTokPendingDmButton, isTikTokPendingButton } from "./modules/tiktokAlerts/tiktokInteractionService.js";
 import type { BotModule, BotModuleContext } from "./types/BotModule.js";
 import { registerGuildCommands } from "./commands/register.js";
 
@@ -56,6 +57,16 @@ client.on("guildMemberAdd", (member) => {
 });
 
 client.on("interactionCreate", (interaction) => {
+  if (interaction.isButton() && isTikTokPendingButton(interaction.customId)) {
+    void handleTikTokPendingDmButton(interaction, configManager, database).catch((error: unknown) => {
+      logger.error({ error, userId: interaction.user.id }, "TikTok pending DM button failed");
+      if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
+        void interaction.reply({ content: error instanceof Error ? error.message : "No se pudo procesar TikTok.", ephemeral: true });
+      }
+    });
+    return;
+  }
+
   const guildId = interaction.guildId;
   if (!guildId) {
     if (interaction.isRepliable()) {

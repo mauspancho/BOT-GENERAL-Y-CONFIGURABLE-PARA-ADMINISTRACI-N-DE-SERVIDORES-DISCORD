@@ -29,6 +29,7 @@ export function createTikTokAuthorization(
   values: { guildId: string; discordUserId: string; now?: Date },
 ): { state: string; url: string } {
   const now = values.now ?? new Date();
+  repository.deleteExpiredOAuthStates(now);
   const state = randomOAuthState();
   repository.createOAuthState({
     state,
@@ -64,7 +65,13 @@ export async function completeTikTokOAuth(
   const connection = buildConnection(config.guildId, user, token, runtime, now);
   const pending = toPendingConnection(values.state, oauthState.discordUserId, connection, now);
   repository.createPendingConnection(pending);
-  await notifyPendingTikTokConnection(client, pending);
+  try {
+    await notifyPendingTikTokConnection(client, pending);
+  } catch {
+    repository.deletePendingConnection(pending.state);
+    await api.revokeToken(token.accessToken).catch(() => undefined);
+    throw new Error("Cuenta autorizada, pero Discord no permitio enviar el mensaje de confirmacion. Habilita los mensajes directos del servidor y vuelve a intentarlo.");
+  }
 
   await sendDiscordLog(
     client,
@@ -79,6 +86,21 @@ export async function completeTikTokOAuth(
   );
 
   return connection;
+}
+
+export async function cleanupExpiredTikTokArtifacts(
+  repository: TikTokRepository,
+  api: TikTokApiClient,
+  runtime: TikTokRuntimeConfig,
+  now = new Date(),
+): Promise<void> {
+  repository.deleteExpiredOAuthStates(now);
+  const expiredPending = repository.listExpiredPendingConnections(now);
+  for (const pending of expiredPending) {
+    const accessToken = decryptTikTokToken(pending.encryptedAccessToken, runtime.encryptionKey);
+    await api.revokeToken(accessToken).catch(() => undefined);
+    repository.deletePendingConnection(pending.state);
+  }
 }
 
 export async function confirmTikTokPendingConnection(

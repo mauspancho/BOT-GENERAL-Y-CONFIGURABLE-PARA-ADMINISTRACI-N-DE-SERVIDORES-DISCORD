@@ -6,7 +6,7 @@ import { TikTokRepository } from "../../repositories/tiktokRepository.js";
 import { sendDiscordLog } from "../../services/discordLogService.js";
 import type { BotModule } from "../../types/BotModule.js";
 import { TikTokApiClient } from "./tiktokApiClient.js";
-import { checkTikTokVideos } from "./tiktokAlertService.js";
+import { checkTikTokVideos, cleanupExpiredTikTokArtifacts } from "./tiktokAlertService.js";
 import { TikTokCallbackServer } from "./tiktokCallbackServer.js";
 import { hasTikTokCredentials, loadTikTokRuntimeConfig } from "./tiktokEnv.js";
 import type { TikTokRuntimeConfig } from "./tiktokTypes.js";
@@ -93,6 +93,7 @@ export class TikTokMultiGuildRuntime {
   }
 
   public async tick(now = new Date()): Promise<void> {
+    await cleanupExpiredTikTokArtifacts(this.repository, this.api, this.runtime, now);
     const connections = this.repository.listEnabledConnections();
     for (const connection of connections) {
       const config = this.configManager.find(connection.guildId);

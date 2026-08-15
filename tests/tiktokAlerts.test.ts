@@ -22,7 +22,9 @@ import {
 } from "../src/modules/tiktokAlerts/tiktokAlertService.js";
 import { TikTokApiClient } from "../src/modules/tiktokAlerts/tiktokApiClient.js";
 import { TikTokCallbackServer } from "../src/modules/tiktokAlerts/tiktokCallbackServer.js";
+import { TIKTOK_CONNECT_CANCEL_PREFIX, TIKTOK_CONNECT_CONFIRM_PREFIX } from "../src/modules/tiktokAlerts/tiktokCustomIds.js";
 import { decryptTikTokToken } from "../src/modules/tiktokAlerts/tiktokCrypto.js";
+import { handleTikTokPendingDmButton, isTikTokPendingButton } from "../src/modules/tiktokAlerts/tiktokInteractionService.js";
 import type { TikTokRuntimeConfig, TikTokTokenResponse, TikTokUserInfo, TikTokVideo } from "../src/modules/tiktokAlerts/tiktokTypes.js";
 import { TikTokRepository } from "../src/repositories/tiktokRepository.js";
 import { makeGuildMock } from "./support/discordMocks.js";
@@ -201,6 +203,207 @@ describe("tiktok alerts", () => {
       repository.consumePendingConnection(auth.state, { guildId: "guild", discordUserId: "other" }),
     ).toThrow(/confirmarla/i);
     expect(repository.findConnection("guild")).toBeUndefined();
+    database.close();
+  });
+
+  it("DM confirmation works with guildId null and resolves guild from state", async () => {
+    const database = await openMemoryDatabase();
+    const repository = new TikTokRepository(database);
+    const api = makeApi({ videos: [video("old", 1_000)] });
+    const config = makeConfig(true);
+    config.guildId = "guild-chepe";
+    const auth = createTikTokAuthorization(repository, api, { guildId: "guild-chepe", discordUserId: "123" });
+    await completeTikTokOAuth(makeClient() as never, config, repository, api, runtime(), {
+      state: auth.state,
+      code: "code",
+    });
+    const interaction = makeButtonInteraction(`${TIKTOK_CONNECT_CONFIRM_PREFIX}${auth.state}`, {
+      userId: "123",
+      guildId: null,
+      admin: true,
+    });
+    const configManager = makeConfigManager([config]);
+
+    const handled = await handleTikTokPendingDmButton(interaction as never, configManager, database, {
+      runtime: runtime(),
+      api,
+    });
+
+    expect(handled).toBe(true);
+    expect(repository.findConnection("guild-chepe")?.openId).toBe("open-id");
+    expect(firstUpdate(interaction).content).toContain("TikTok conectado");
+    database.close();
+  });
+
+  it("DM cancel works with guildId null", async () => {
+    const database = await openMemoryDatabase();
+    const repository = new TikTokRepository(database);
+    const api = makeApi();
+    const config = makeConfig(true);
+    const auth = createTikTokAuthorization(repository, api, { guildId: "guild", discordUserId: "123" });
+    await completeTikTokOAuth(makeClient() as never, config, repository, api, runtime(), {
+      state: auth.state,
+      code: "code",
+    });
+    const interaction = makeButtonInteraction(`${TIKTOK_CONNECT_CANCEL_PREFIX}${auth.state}`, {
+      userId: "123",
+      guildId: null,
+      admin: true,
+    });
+
+    await handleTikTokPendingDmButton(interaction as never, makeConfigManager([config]), database, {
+      runtime: runtime(),
+      api,
+    });
+
+    expect(repository.findConnection("guild")).toBeUndefined();
+    expect(repository.findPendingConnection(auth.state)).toBeUndefined();
+    expectRevokeCalled(api, "access-1");
+    database.close();
+  });
+
+  it("wrong DM user cannot confirm pending TikTok connection", async () => {
+    const database = await openMemoryDatabase();
+    const repository = new TikTokRepository(database);
+    const api = makeApi();
+    const config = makeConfig(true);
+    const auth = createTikTokAuthorization(repository, api, { guildId: "guild", discordUserId: "123" });
+    await completeTikTokOAuth(makeClient() as never, config, repository, api, runtime(), {
+      state: auth.state,
+      code: "code",
+    });
+    const interaction = makeButtonInteraction(`${TIKTOK_CONNECT_CONFIRM_PREFIX}${auth.state}`, {
+      userId: "456",
+      guildId: null,
+      admin: true,
+    });
+
+    await handleTikTokPendingDmButton(interaction as never, makeConfigManager([config]), database, {
+      runtime: runtime(),
+      api,
+    });
+
+    expect(repository.findConnection("guild")).toBeUndefined();
+    expect(firstButtonReply(interaction).content).toContain("Solo quien inicio");
+    database.close();
+  });
+
+  it("admin who lost Administrator cannot confirm pending TikTok connection", async () => {
+    const database = await openMemoryDatabase();
+    const repository = new TikTokRepository(database);
+    const api = makeApi();
+    const config = makeConfig(true);
+    const auth = createTikTokAuthorization(repository, api, { guildId: "guild", discordUserId: "123" });
+    await completeTikTokOAuth(makeClient() as never, config, repository, api, runtime(), {
+      state: auth.state,
+      code: "code",
+    });
+    const interaction = makeButtonInteraction(`${TIKTOK_CONNECT_CONFIRM_PREFIX}${auth.state}`, {
+      userId: "123",
+      guildId: null,
+      admin: false,
+    });
+
+    await handleTikTokPendingDmButton(interaction as never, makeConfigManager([config]), database, {
+      runtime: runtime(),
+      api,
+    });
+
+    expect(repository.findConnection("guild")).toBeUndefined();
+    expect(firstButtonReply(interaction).content).toContain("Administrador");
+    database.close();
+  });
+
+  it("Chepe pending state never uses Maus config", async () => {
+    const database = await openMemoryDatabase();
+    const repository = new TikTokRepository(database);
+    const api = makeApi();
+    const chepe = makeConfig(true);
+    chepe.guildId = "guild-chepe";
+    const maus = makeConfig(true);
+    maus.guildId = "guild-maus";
+    const auth = createTikTokAuthorization(repository, api, { guildId: "guild-chepe", discordUserId: "123" });
+    await completeTikTokOAuth(makeClient() as never, chepe, repository, api, runtime(), {
+      state: auth.state,
+      code: "code",
+    });
+    const get = vi.fn((guildId: string) => (guildId === "guild-chepe" ? chepe : maus));
+    const interaction = makeButtonInteraction(`${TIKTOK_CONNECT_CONFIRM_PREFIX}${auth.state}`, {
+      userId: "123",
+      guildId: null,
+      admin: true,
+    });
+
+    await handleTikTokPendingDmButton(interaction as never, { get }, database, {
+      runtime: runtime(),
+      api,
+    });
+
+    expect(get).toHaveBeenCalledWith("guild-chepe");
+    expect(repository.findConnection("guild-chepe")).toBeDefined();
+    expect(repository.findConnection("guild-maus")).toBeUndefined();
+    database.close();
+  });
+
+  it("expired pending DM confirmation fails", async () => {
+    const database = await openMemoryDatabase();
+    const repository = new TikTokRepository(database);
+    const api = makeApi();
+    const config = makeConfig(true);
+    const old = new Date("2026-08-14T00:00:00.000Z");
+    const auth = createTikTokAuthorization(repository, api, { guildId: "guild", discordUserId: "123", now: old });
+    await completeTikTokOAuth(makeClient() as never, config, repository, api, runtime(), {
+      state: auth.state,
+      code: "code",
+      now: old,
+    });
+    const interaction = makeButtonInteraction(`${TIKTOK_CONNECT_CONFIRM_PREFIX}${auth.state}`, {
+      userId: "123",
+      guildId: null,
+      admin: true,
+    });
+
+    await expect(
+      handleTikTokPendingDmButton(interaction as never, makeConfigManager([config]), database, {
+        runtime: runtime(),
+        api,
+      }),
+    ).rejects.toThrow(/expiro/);
+    expect(repository.findConnection("guild")).toBeUndefined();
+    database.close();
+  });
+
+  it("blocked DM removes pending and revokes token", async () => {
+    const database = await openMemoryDatabase();
+    const repository = new TikTokRepository(database);
+    const api = makeApi();
+    const auth = createTikTokAuthorization(repository, api, { guildId: "guild", discordUserId: "admin" });
+
+    await expect(
+      completeTikTokOAuth(makeClient({ dmReject: true }) as never, makeConfig(true), repository, api, runtime(), {
+        state: auth.state,
+        code: "code",
+      }),
+    ).rejects.toThrow(/mensajes directos/);
+
+    expect(repository.findPendingConnection(auth.state)).toBeUndefined();
+    expect(repository.findConnection("guild")).toBeUndefined();
+    expectRevokeCalled(api, "access-1");
+    database.close();
+  });
+
+  it("unknown DM button is not handled by TikTok pending router", async () => {
+    const database = await openMemoryDatabase();
+    const interaction = makeButtonInteraction("rules:accept", { userId: "123", guildId: null, admin: true });
+
+    const handled = await handleTikTokPendingDmButton(interaction as never, makeConfigManager([makeConfig(true)]), database, {
+      runtime: runtime(),
+      api: makeApi(),
+    });
+
+    expect(handled).toBe(false);
+    expect(isTikTokPendingButton("rules:accept")).toBe(false);
+    expect(interaction.reply).not.toHaveBeenCalled();
     database.close();
   });
 
@@ -633,7 +836,7 @@ interface AlertPayload {
   };
 }
 
-function makeClient() {
+function makeClient(options: { dmReject?: boolean } = {}) {
   const generalSend = vi.fn((payload: AlertPayload) => {
     void payload;
     return Promise.resolve();
@@ -644,7 +847,7 @@ function makeClient() {
   });
   const dmSend = vi.fn((payload: unknown) => {
     void payload;
-    return Promise.resolve();
+    return options.dmReject ? Promise.reject(new Error("DM blocked")) : Promise.resolve();
   });
   return {
     generalSend,
@@ -688,6 +891,55 @@ function isContentPayload(value: unknown): value is { content: string } {
 function expectRevokeCalled(api: TikTokApiClient, tokenValue: string): void {
   const calls = (api.revokeToken as unknown as { mock: { calls: unknown[][] } }).mock.calls;
   expect(calls).toContainEqual([tokenValue]);
+}
+
+function makeButtonInteraction(customId: string, options: { userId: string; guildId: string | null; admin: boolean }) {
+  const reply = vi.fn((payload: { content: string; ephemeral: boolean }) => {
+    void payload;
+    return Promise.resolve();
+  });
+  const update = vi.fn((payload: { content: string; components: unknown[] }) => {
+    void payload;
+    return Promise.resolve();
+  });
+  return {
+    customId,
+    guildId: options.guildId,
+    user: { id: options.userId },
+    client: {
+      guilds: {
+        fetch: vi.fn(() =>
+          Promise.resolve({
+            members: {
+              fetch: vi.fn(() =>
+                Promise.resolve({
+                  permissions: { has: vi.fn(() => options.admin) },
+                }),
+              ),
+            },
+          }),
+        ),
+      },
+    },
+    reply,
+    update,
+  };
+}
+
+function firstButtonReply(interaction: ReturnType<typeof makeButtonInteraction>): { content: string; ephemeral: boolean } {
+  const payload = interaction.reply.mock.calls[0]?.[0];
+  if (!payload) {
+    throw new Error("No button reply.");
+  }
+  return payload;
+}
+
+function firstUpdate(interaction: ReturnType<typeof makeButtonInteraction>): { content: string; components: unknown[] } {
+  const payload = interaction.update.mock.calls[0]?.[0];
+  if (!payload) {
+    throw new Error("No button update.");
+  }
+  return payload;
 }
 
 function makeInteraction(subcommand: string, options: {

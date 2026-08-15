@@ -56,6 +56,13 @@ export class TikTokRepository {
       .run(state.state, state.guildId, state.discordUserId, state.createdAt, state.expiresAt, state.used ? 1 : 0);
   }
 
+  public deleteExpiredOAuthStates(now = new Date()): void {
+    const usedBefore = new Date(now.getTime() - 60 * 60 * 1000).toISOString();
+    this.database
+      .prepare("DELETE FROM tiktok_oauth_states WHERE expires_at <= ? OR (used = 1 AND created_at <= ?)")
+      .run(now.toISOString(), usedBefore);
+  }
+
   public findOAuthState(state: string): TikTokOAuthState | undefined {
     const row = this.database
       .prepare("SELECT * FROM tiktok_oauth_states WHERE state = ?")
@@ -151,6 +158,13 @@ export class TikTokRepository {
       .prepare("SELECT * FROM tiktok_pending_connections WHERE state = ?")
       .get(state) as TikTokPendingConnectionRow | undefined;
     return row ? mapPendingConnection(row) : undefined;
+  }
+
+  public listExpiredPendingConnections(now = new Date()): TikTokPendingConnection[] {
+    return this.database
+      .prepare("SELECT * FROM tiktok_pending_connections WHERE expires_at <= ?")
+      .all(now.toISOString())
+      .map((row) => mapPendingConnection(row as TikTokPendingConnectionRow));
   }
 
   public consumePendingConnection(
